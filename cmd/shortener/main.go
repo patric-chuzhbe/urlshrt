@@ -16,17 +16,15 @@ import (
 )
 
 const (
-	TRIES_TO_GENERATE_UNIQUE_KEY = 10
-	AMT_OF_SYMBOLS_TO_GENERATE   = 8
-	DB_FILE_NAME                 = "db.json"
-	SHORT_URL_TEMPLATE           = "http://localhost:8080/%s"
+	TriesToGenerateUniqueKey = 10
+	AmtOfSymbolsToGenerate   = 8
+	DBFileName               = "db.json"
+	ShortURLTemplate         = "http://localhost:8080/%s"
 )
 
-type SimpleJsonDb struct {
+type SimpleJSONDB struct {
 	fileName string
-	//Cache    map[string]string
-
-	cache CacheStruct
+	cache    CacheStruct
 }
 
 type CacheStruct struct {
@@ -34,9 +32,9 @@ type CacheStruct struct {
 	FullToShort map[string]string
 }
 
-var theDb *SimpleJsonDb
+var theDB *SimpleJSONDB
 
-func initDbFile(fileName string) error {
+func initDBFile(fileName string) error {
 	dbFile, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -51,7 +49,7 @@ func initDbFile(fileName string) error {
 	return dbFile.Close()
 }
 
-func writeToJsonFile(fileName string, cache interface{}) error {
+func writeToJSONFile(fileName string, cache interface{}) error {
 	jsonData, err := json.MarshalIndent(cache, "", "\t")
 	if err != nil {
 		return fmt.Errorf("error marshaling JSON: %s", err)
@@ -71,53 +69,15 @@ func writeToJsonFile(fileName string, cache interface{}) error {
 	return nil
 }
 
-func parseJsonFile(fileName string, cacheMap *CacheStruct) error {
+func parseJSONFile(fileName string, cacheMap *CacheStruct) error {
 	file, err := os.Open(fileName)
 	if err != nil {
-		return err /*errors.New(fmt.Sprintf("error opening file: %s", err.Error()))*/
+		return err
 	}
 	defer file.Close()
 
 	decoder := json.NewDecoder(file)
 	err = decoder.Decode(cacheMap)
-	if err != nil {
-		return err /*errors.New(fmt.Sprintf("error decoding JSON: %s", err.Error()))*/
-	}
-
-	return nil
-}
-
-func NewSimpleJsonDb(fileName string) (*SimpleJsonDb, error) {
-	simpleJsonDb := SimpleJsonDb{
-		fileName: fileName,
-		cache:    CacheStruct{},
-	}
-
-	err := parseJsonFile(simpleJsonDb.fileName, &simpleJsonDb.cache)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return nil, err
-		}
-		err := initDbFile(fileName)
-		if err != nil {
-			return nil, err
-		}
-		err = parseJsonFile(simpleJsonDb.fileName, &simpleJsonDb.cache)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return &simpleJsonDb, nil
-}
-
-func (db *SimpleJsonDb) Insert(short, full string) {
-	db.cache.ShortToFull[short] = full
-	db.cache.FullToShort[full] = short
-}
-
-func (db *SimpleJsonDb) Close() error {
-	err := writeToJsonFile(db.fileName, db.cache)
 	if err != nil {
 		return err
 	}
@@ -125,24 +85,62 @@ func (db *SimpleJsonDb) Close() error {
 	return nil
 }
 
-func (db *SimpleJsonDb) FindFullByShort(short string) (full string, found bool) {
+func NewSimpleJSONDB(fileName string) (*SimpleJSONDB, error) {
+	simpleJSONDB := SimpleJSONDB{
+		fileName: fileName,
+		cache:    CacheStruct{},
+	}
+
+	err := parseJSONFile(simpleJSONDB.fileName, &simpleJSONDB.cache)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		err := initDBFile(fileName)
+		if err != nil {
+			return nil, err
+		}
+		err = parseJSONFile(simpleJSONDB.fileName, &simpleJSONDB.cache)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &simpleJSONDB, nil
+}
+
+func (db *SimpleJSONDB) Insert(short, full string) {
+	db.cache.ShortToFull[short] = full
+	db.cache.FullToShort[full] = short
+}
+
+func (db *SimpleJSONDB) Close() error {
+	err := writeToJSONFile(db.fileName, db.cache)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *SimpleJSONDB) FindFullByShort(short string) (full string, found bool) {
 	full, found = db.cache.ShortToFull[short]
-	return /*db.cache.ShortToFull[short]*/
+	return
 }
 
-func (db *SimpleJsonDb) FindShortByFull(full string) (short string, found bool) {
+func (db *SimpleJSONDB) FindShortByFull(full string) (short string, found bool) {
 	short, found = db.cache.FullToShort[full]
-	return /*db.cache.FullToShort[full]*/
+	return
 }
 
-func (db *SimpleJsonDb) IsShortExists(short string) bool {
+func (db *SimpleJSONDB) IsShortExists(short string) bool {
 	_, exists := db.cache.ShortToFull[short]
 	return exists
 }
 
-func redirectToFullUrl(res http.ResponseWriter, req *http.Request) {
+func redirectToFullURL(res http.ResponseWriter, req *http.Request) {
 	short := mux.Vars(req)["short"]
-	full, found := theDb.FindFullByShort(short)
+	full, found := theDB.FindFullByShort(short)
 	if !found {
 		res.WriteHeader(http.StatusNotFound)
 		_, err := res.Write([]byte("404 Not Found"))
@@ -169,9 +167,9 @@ func generateRandomString(length int) string {
 
 func generateShortKey() (string, error) {
 	shortKey := ""
-	for i := 0; i < TRIES_TO_GENERATE_UNIQUE_KEY; i++ {
-		shortKey = generateRandomString(AMT_OF_SYMBOLS_TO_GENERATE)
-		if !theDb.IsShortExists(shortKey) {
+	for i := 0; i < TriesToGenerateUniqueKey; i++ {
+		shortKey = generateRandomString(AmtOfSymbolsToGenerate)
+		if !theDB.IsShortExists(shortKey) {
 			return shortKey, nil
 		}
 	}
@@ -179,7 +177,7 @@ func generateShortKey() (string, error) {
 }
 
 func getShortKey(urlToShort string) (string, error) {
-	short, found := theDb.FindShortByFull(urlToShort)
+	short, found := theDB.FindShortByFull(urlToShort)
 	if found {
 		return short, nil
 	}
@@ -187,12 +185,12 @@ func getShortKey(urlToShort string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	theDb.Insert(short, urlToShort)
+	theDB.Insert(short, urlToShort)
 
 	return short, nil
 }
 
-func extractFirstUrl(urlToShort string) (string, error) {
+func extractFirstURL(urlToShort string) (string, error) {
 	urlPattern := regexp.MustCompile(`\bhttps?://\S+\b`)
 	match := urlPattern.FindString(urlToShort)
 	if match == "" {
@@ -202,9 +200,7 @@ func extractFirstUrl(urlToShort string) (string, error) {
 	return match, nil
 }
 
-func getUrlToShort(req *http.Request) (string, error) {
-	//urlToShort := make([]byte, req.ContentLength)
-	//bytesRead, err := req.Body.Read(urlToShort)
+func getURLToShort(req *http.Request) (string, error) {
 	urlToShort, err := io.ReadAll(req.Body)
 	if err != nil {
 		return "", err
@@ -212,7 +208,7 @@ func getUrlToShort(req *http.Request) (string, error) {
 
 	urlToShortAsString := string(urlToShort)
 
-	urlToShortAsString, err = extractFirstUrl(urlToShortAsString)
+	urlToShortAsString, err = extractFirstURL(urlToShortAsString)
 	if err != nil {
 		return "", err
 	}
@@ -221,7 +217,7 @@ func getUrlToShort(req *http.Request) (string, error) {
 }
 
 func mainPage(res http.ResponseWriter, req *http.Request) {
-	urlToShort, err := getUrlToShort(req)
+	urlToShort, err := getURLToShort(req)
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
@@ -235,7 +231,7 @@ func mainPage(res http.ResponseWriter, req *http.Request) {
 
 	res.WriteHeader(http.StatusCreated)
 
-	_, err = res.Write([]byte(fmt.Sprintf(SHORT_URL_TEMPLATE, shortKey)))
+	_, err = res.Write([]byte(fmt.Sprintf(ShortURLTemplate, shortKey)))
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
@@ -244,12 +240,12 @@ func mainPage(res http.ResponseWriter, req *http.Request) {
 
 func main() {
 	var err error
-	theDb, err = NewSimpleJsonDb(DB_FILE_NAME)
+	theDB, err = NewSimpleJSONDB(DBFileName)
 	if err != nil {
 		panic(err)
 	}
 	defer func() {
-		err := theDb.Close()
+		err := theDB.Close()
 		if err != nil {
 			panic(err)
 		}
@@ -257,7 +253,7 @@ func main() {
 
 	router := mux.NewRouter()
 	router.HandleFunc(`/`, mainPage)
-	router.HandleFunc(`/{short}`, redirectToFullUrl)
+	router.HandleFunc(`/{short}`, redirectToFullURL)
 
 	fmt.Println("listening port 8080...")
 
@@ -268,14 +264,14 @@ func main() {
 	go func() {
 		<-sigCh
 		fmt.Println("\nReceived interrupt signal, closing database and exiting...")
-		err := theDb.Close()
+		err := theDB.Close()
 		if err != nil {
 			panic(err)
 		}
 		os.Exit(0)
 	}()
 
-	err = http.ListenAndServe(`:8080`, router /*mux*/)
+	err = http.ListenAndServe(`:8080`, router)
 	if err != nil {
 		panic(err)
 	}
