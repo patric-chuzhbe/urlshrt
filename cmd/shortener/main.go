@@ -36,20 +36,20 @@ type CacheStruct struct {
 
 var theDb *SimpleJsonDb
 
-/* < testCode>*/
-func dumpAnyStructByGubanov(val interface{}) string {
-	if val == nil {
-		return "null"
-	}
-
-	str, err := json.MarshalIndent(val, "", "\t")
+func initDbFile(fileName string) error {
+	dbFile, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return fmt.Sprintf("Error marshaling JSON: %s", err)
+		return err
 	}
-	return string(str)
+	_, err = fmt.Fprintln(dbFile, `{
+	"ShortToFull": {},
+	"FullToShort": {}
+}`)
+	if err != nil {
+		return err
+	}
+	return dbFile.Close()
 }
-
-/* </testCode>*/
 
 func writeToJsonFile(fileName string, cache interface{}) error {
 	jsonData, err := json.MarshalIndent(cache, "", "\t")
@@ -74,14 +74,14 @@ func writeToJsonFile(fileName string, cache interface{}) error {
 func parseJsonFile(fileName string, cacheMap *CacheStruct) error {
 	file, err := os.Open(fileName)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Error opening file: %s", err.Error()))
+		return err /*errors.New(fmt.Sprintf("error opening file: %s", err.Error()))*/
 	}
 	defer file.Close()
 
 	decoder := json.NewDecoder(file)
 	err = decoder.Decode(cacheMap)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Error decoding JSON: %s", err.Error()))
+		return err /*errors.New(fmt.Sprintf("error decoding JSON: %s", err.Error()))*/
 	}
 
 	return nil
@@ -95,7 +95,17 @@ func NewSimpleJsonDb(fileName string) (*SimpleJsonDb, error) {
 
 	err := parseJsonFile(simpleJsonDb.fileName, &simpleJsonDb.cache)
 	if err != nil {
-		return nil, err
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		err := initDbFile(fileName)
+		if err != nil {
+			return nil, err
+		}
+		err = parseJsonFile(simpleJsonDb.fileName, &simpleJsonDb.cache)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &simpleJsonDb, nil
@@ -143,20 +153,6 @@ func redirectToFullUrl(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	http.Redirect(res, req, full, http.StatusTemporaryRedirect)
-	/*< testCode>*/
-	/*< testCode>*/
-	if false {
-		/*</testCode>*/
-		/*</testCode>*/
-		id := mux.Vars(req)["id"]
-		_, err := res.Write([]byte(fmt.Sprintf("Hola!\n\tthe id: %s", id)))
-		if err != nil {
-			http.Error(res, err.Error(), http.StatusBadRequest)
-			return
-		}
-		/*</testCode>*/
-		/*< testCode>*/
-	}
 }
 
 func generateRandomString(length int) string {
@@ -232,13 +228,12 @@ func mainPage(res http.ResponseWriter, req *http.Request) {
 	}
 
 	shortKey, err := getShortKey(urlToShort)
-	//shortKey, err := generateShortKey(urlToShort)
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	//theDb.Insert(shortKey, urlToShort)
+	res.WriteHeader(http.StatusCreated)
 
 	_, err = res.Write([]byte(fmt.Sprintf(SHORT_URL_TEMPLATE, shortKey)))
 	if err != nil {
@@ -263,10 +258,6 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc(`/`, mainPage)
 	router.HandleFunc(`/{short}`, redirectToFullUrl)
-
-	//mux := http.NewServeMux()
-	//mux.HandleFunc(`/`, mainPage)
-	//mux.HandleFunc(`/EwH`, redirectToFullUrl)
 
 	fmt.Println("listening port 8080...")
 
