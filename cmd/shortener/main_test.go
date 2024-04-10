@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -18,21 +16,6 @@ import (
 const (
 	testDBFileName = "db_test.json"
 )
-
-/*< testCode>*/
-func dumpAnyStructByGubanov(val interface{}) string {
-	if val == nil {
-		return "null"
-	}
-
-	str, err := json.MarshalIndent(val, "", "\t")
-	if err != nil {
-		return fmt.Sprintf("Error marshaling JSON: %s", err)
-	}
-	return string(str)
-}
-
-/*</testCode>*/
 
 func TestMainPageAndRedirectToFullURL(t *testing.T) {
 	type requestResult struct {
@@ -144,16 +127,16 @@ eshche odna stroka
 
 			var shortURL []byte
 
+			// Shorten URL
 			if !tt.mainPageRequest.bypass {
-				// Shorten URL
 				request := httptest.NewRequest(
 					http.MethodPost,
 					tt.mainPageRequest.URL,
 					strings.NewReader(tt.mainPageRequest.body),
 				)
 				w := httptest.NewRecorder()
-				router := mux.NewRouter()
-				router.HandleFunc("/", mainPage)
+				router := chi.NewRouter()
+				router.Post("/", mainPage)
 				router.ServeHTTP(w, request)
 
 				result := w.Result()
@@ -167,8 +150,8 @@ eshche odna stroka
 				require.NoError(t, err)
 			}
 
+			// Redirect to full URL
 			if !tt.redirectToFullURLRequest.bypass {
-				// Redirect to full URL
 				if tt.mainPageRequest.bypass {
 					shortURL = []byte(tt.redirectToFullURLRequest.URL)
 				}
@@ -183,8 +166,8 @@ eshche odna stroka
 				)
 
 				w := httptest.NewRecorder()
-				router := mux.NewRouter()
-				router.HandleFunc("/{short}", redirectToFullURL)
+				router := chi.NewRouter()
+				router.Get("/{short}", redirectToFullURL)
 				router.ServeHTTP(w, request)
 
 				result := w.Result()

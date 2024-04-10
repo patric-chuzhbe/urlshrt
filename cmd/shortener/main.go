@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"io"
 	"math/big"
 	"net/http"
@@ -139,7 +139,7 @@ func (db *SimpleJSONDB) IsShortExists(short string) bool {
 }
 
 func redirectToFullURL(res http.ResponseWriter, req *http.Request) {
-	short := mux.Vars(req)["short"]
+	short := chi.URLParam(req, "short")
 	full, found := theDB.FindFullByShort(short)
 	if !found {
 		res.WriteHeader(http.StatusNotFound)
@@ -251,9 +251,9 @@ func main() {
 		}
 	}()
 
-	router := mux.NewRouter()
-	router.HandleFunc(`/`, mainPage)
-	router.HandleFunc(`/{short}`, redirectToFullURL)
+	router := chi.NewRouter()
+	router.Post(`/`, mainPage)
+	router.Get(`/{short}`, redirectToFullURL)
 
 	fmt.Println("listening port 8080...")
 
