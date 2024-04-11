@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/go-chi/chi/v5"
+	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"io"
 	"math/big"
 	"net/http"
@@ -19,7 +20,7 @@ const (
 	TriesToGenerateUniqueKey = 10
 	AmtOfSymbolsToGenerate   = 8
 	DBFileName               = "db.json"
-	ShortURLTemplate         = "http://localhost:8080/%s"
+	//ShortURLTemplate         = "http://localhost:8080/%s"
 )
 
 type SimpleJSONDB struct {
@@ -231,7 +232,7 @@ func mainPage(res http.ResponseWriter, req *http.Request) {
 
 	res.WriteHeader(http.StatusCreated)
 
-	_, err = res.Write([]byte(fmt.Sprintf(ShortURLTemplate, shortKey)))
+	_, err = res.Write([]byte(config.Values.ShortURLBase + "/" + shortKey))
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
@@ -239,7 +240,10 @@ func mainPage(res http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
+	config.Init()
+
 	var err error
+
 	theDB, err = NewSimpleJSONDB(DBFileName)
 	if err != nil {
 		panic(err)
@@ -255,8 +259,6 @@ func main() {
 	router.Post(`/`, mainPage)
 	router.Get(`/{short}`, redirectToFullURL)
 
-	fmt.Println("listening port 8080...")
-
 	// Handle SIGINT signal (Ctrl+C)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -271,7 +273,9 @@ func main() {
 		os.Exit(0)
 	}()
 
-	err = http.ListenAndServe(`:8080`, router)
+	fmt.Println("Running server on", config.Values.RunAddr)
+
+	err = http.ListenAndServe(config.Values.RunAddr, router)
 	if err != nil {
 		panic(err)
 	}
