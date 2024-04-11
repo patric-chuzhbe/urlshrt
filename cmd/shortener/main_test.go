@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/go-chi/chi/v5"
+	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -110,6 +111,9 @@ eshche odna stroka
 			},
 		},
 	}
+
+	config.Init()
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var err error
