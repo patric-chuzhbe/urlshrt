@@ -3,16 +3,22 @@ package config
 import (
 	"flag"
 	env "github.com/caarlos0/env/v6"
+	validator "github.com/go-playground/validator/v10"
 )
 
 type config struct {
-	RunAddr      string `env:"SERVER_ADDRESS"`
-	ShortURLBase string `env:"BASE_URL"`
+	RunAddr      string `env:"SERVER_ADDRESS" validate:"hostname_port"`
+	ShortURLBase string `env:"BASE_URL" validate:"url"`
 }
 
 var Values config
 
-func Init() {
+func validate() error {
+	validate := validator.New()
+	return validate.Struct(Values)
+}
+
+func Init() error {
 	Values = config{
 		RunAddr:      ":8080",
 		ShortURLBase: "http://localhost:8080",
@@ -32,4 +38,6 @@ func Init() {
 	if valuesFromEnv.ShortURLBase != "" {
 		Values.ShortURLBase = valuesFromEnv.ShortURLBase
 	}
+
+	return validate()
 }

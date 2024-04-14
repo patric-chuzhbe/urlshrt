@@ -1,8 +1,9 @@
-package main
+package router
 
 import (
 	"github.com/go-chi/chi/v5"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
+	"github.com/patric-chuzhbe/urlshrt/internal/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -18,7 +19,7 @@ const (
 	testDBFileName = "db_test.json"
 )
 
-func TestMainPageAndRedirectToFullURL(t *testing.T) {
+func TestPostShortenAndGetRedirecttofullurl(t *testing.T) {
 	type requestResult struct {
 		bypass     bool
 		statusCode int
@@ -112,18 +113,19 @@ eshche odna stroka
 		},
 	}
 
-	config.Init()
+	err := config.Init()
+	require.NoError(t, err)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var err error
 
 			// The DB
-			theDB, err = NewSimpleJSONDB(testDBFileName)
+			theDB, err = db.NewSimpleJSONDB(testDBFileName)
 			require.NoError(t, err)
 			require.NotNil(t, theDB)
 			defer func() {
-				err := theDB.Close()
+				err := theDB.SaveIntoFile()
 				require.NoError(t, err)
 				err = os.Remove(testDBFileName)
 				require.NoError(t, err)
@@ -140,7 +142,7 @@ eshche odna stroka
 				)
 				w := httptest.NewRecorder()
 				router := chi.NewRouter()
-				router.Post("/", mainPage)
+				router.Post("/", PostShorten)
 				router.ServeHTTP(w, request)
 
 				result := w.Result()
@@ -171,7 +173,7 @@ eshche odna stroka
 
 				w := httptest.NewRecorder()
 				router := chi.NewRouter()
-				router.Get("/{short}", redirectToFullURL)
+				router.Get("/{short}", GetRedirecttofullurl)
 				router.ServeHTTP(w, request)
 
 				result := w.Result()
