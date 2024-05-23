@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/patric-chuzhbe/urlshrt/internal/db"
+	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/router"
 	"net/http"
 	"os"
@@ -24,6 +25,17 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	err = logger.Init(config.Values.LogLevel)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		err := logger.Sync()
+		if err != nil {
+			panic(err)
+		}
+	}()
 
 	theDB, err = db.NewSimpleJSONDB(DBFileName)
 	if err != nil {
@@ -46,7 +58,9 @@ func main() {
 
 	go func() {
 		<-sigCh
-		fmt.Println("\nReceived interrupt signal, saving database and exiting...")
+		logger.Log.Infoln(
+			"Received interrupt signal, saving database and exiting...",
+		)
 		err := theDB.SaveIntoFile()
 		if err != nil {
 			panic(err)
@@ -54,7 +68,10 @@ func main() {
 		os.Exit(0)
 	}()
 
-	fmt.Println("Running server on", config.Values.RunAddr)
+	logger.Log.Infoln(
+		"server running",
+		"RunAddr", config.Values.RunAddr,
+	)
 
 	err = http.ListenAndServe(config.Values.RunAddr, httpHandler)
 	if err != nil {

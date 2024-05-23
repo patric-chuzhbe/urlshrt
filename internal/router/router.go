@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/patric-chuzhbe/urlshrt/internal/db"
+	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"io"
 	"net/http"
 	"regexp"
@@ -86,6 +87,7 @@ func PostShorten(res http.ResponseWriter, req *http.Request) {
 func New(database *db.SimpleJSONDB) *chi.Mux {
 	theDB = database
 	router := chi.NewRouter()
+	router.Use(logger.WithLoggingHTTPMiddleware)
 	router.Post(`/`, PostShorten)
 	router.Get(`/{short}`, GetRedirecttofullurl)
 
