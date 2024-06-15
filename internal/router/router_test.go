@@ -1,9 +1,12 @@
 package router
 
 import (
+	"fmt"
 	"github.com/go-chi/chi/v5"
+	resty "github.com/go-resty/resty/v2"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/patric-chuzhbe/urlshrt/internal/db"
+	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -11,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -18,6 +22,132 @@ import (
 const (
 	testDBFileName = "db_test.json"
 )
+
+func TestPostApishorten(t *testing.T) {
+	err := config.Init(config.WithDisableFlagsParsing(true))
+	require.NoError(t, err)
+
+	type tRequest struct {
+		method string
+		body   string
+	}
+	type tExpectedResponse struct {
+		code int
+		body *regexp.Regexp
+	}
+	type tTestCase struct {
+		name             string
+		request          tRequest
+		expectedResponse tExpectedResponse
+	}
+	positiveRequestBody := `{
+		"url": "https://ru.wikipedia.org/wiki/%D0%9F%D1%83%D1%88%D0%BA%D0%B0"
+	}`
+	testCases := []tTestCase{
+		{
+			name: "positive",
+			request: tRequest{
+				http.MethodPost,
+				positiveRequestBody,
+			},
+			expectedResponse: tExpectedResponse{
+				http.StatusCreated,
+				regexp.MustCompile(`\{\s*"result"\s*:\s*"http://localhost:8080/\w+-\w+-\w+-\w+-\w+"\s*\}`),
+			},
+		},
+		{
+			name: "empty_JSON",
+			request: tRequest{
+				http.MethodPost,
+				`{}`,
+			},
+			expectedResponse: tExpectedResponse{
+				http.StatusUnprocessableEntity,
+				nil,
+			},
+		},
+		{
+			name: "empty_body",
+			request: tRequest{
+				http.MethodPost,
+				``,
+			},
+			expectedResponse: tExpectedResponse{
+				http.StatusInternalServerError,
+				nil,
+			},
+		},
+		{
+			name: "unsupported_method_get",
+			request: tRequest{
+				http.MethodGet,
+				positiveRequestBody,
+			},
+			expectedResponse: tExpectedResponse{
+				http.StatusMethodNotAllowed,
+				nil,
+			},
+		},
+		{
+			name: "unsupported_method_put",
+			request: tRequest{
+				http.MethodPut,
+				``,
+			},
+			expectedResponse: tExpectedResponse{
+				http.StatusMethodNotAllowed,
+				nil,
+			},
+		},
+	}
+
+	handler := http.HandlerFunc(PostApishorten)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	err = logger.Init("debug")
+	require.NoError(t, err)
+
+	// The DB
+	theDB, err = db.NewSimpleJSONDB(testDBFileName)
+	require.NoError(t, err)
+	require.NotNil(t, theDB)
+	defer func() {
+		err := theDB.SaveIntoFile()
+		require.NoError(t, err)
+		err = os.Remove(testDBFileName)
+		require.NoError(t, err)
+	}()
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			req := resty.New().R()
+			req.Method = testCase.request.method
+			req.URL = fmt.Sprintf("%s/api/shorten", srv.URL)
+
+			if len(testCase.request.body) > 0 {
+				req.SetHeader("Content-Type", "application/json")
+				req.SetBody(testCase.request.body)
+			}
+
+			resp, err := req.Send()
+			assert.NoError(t, err, "error making HTTP request")
+
+			assert.Equal(t, testCase.expectedResponse.code, resp.StatusCode(), "Response code didn't match expected value")
+
+			if testCase.expectedResponse.body != nil {
+				assert.NotNil(
+					t,
+					testCase.expectedResponse.body.FindIndex(resp.Body()),
+					fmt.Sprintf(
+						"The response body should match expected value (%s)",
+						testCase.expectedResponse.body.String(),
+					),
+				)
+			}
+		})
+	}
+}
 
 func TestPostShortenAndGetRedirecttofullurl(t *testing.T) {
 	type requestResult struct {

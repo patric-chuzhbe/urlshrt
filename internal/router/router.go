@@ -1,12 +1,16 @@
 package router
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/patric-chuzhbe/urlshrt/internal/db"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
+	"go.uber.org/zap"
 	"io"
 	"net/http"
 	"regexp"
@@ -15,6 +19,50 @@ import (
 var theDB *db.SimpleJSONDB
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
+
+func getShortURL(shortKey string) string {
+	return config.Values.ShortURLBase + "/" + shortKey
+}
+
+func PostApishorten(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		logger.Log.Debug("got request with bad method", zap.String("method", request.Method))
+		response.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var requestDTO models.Request
+	if err := json.NewDecoder(request.Body).Decode(&requestDTO); err != nil {
+		logger.Log.Debugln("cannot decode request JSON body", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	validate := validator.New()
+	if err := validate.Struct(requestDTO); err != nil {
+		logger.Log.Debugln("incorrect request structure", zap.Error(err))
+		response.WriteHeader(http.StatusUnprocessableEntity)
+		return
+	}
+
+	urlToShort := requestDTO.URL
+	shortKey, err := getShortKey(urlToShort)
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+	shortURL := getShortURL(shortKey)
+
+	responseDTO := models.Response{Result: shortURL}
+
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusCreated)
+
+	if err := json.NewEncoder(response).Encode(responseDTO); err != nil {
+		logger.Log.Debug("error encoding response", zap.Error(err))
+		return
+	}
+}
 
 func GetRedirecttofullurl(res http.ResponseWriter, req *http.Request) {
 	short := chi.URLParam(req, "short")
@@ -77,7 +125,7 @@ func PostShorten(res http.ResponseWriter, req *http.Request) {
 
 	res.WriteHeader(http.StatusCreated)
 
-	_, err = res.Write([]byte(config.Values.ShortURLBase + "/" + shortKey))
+	_, err = res.Write([]byte(getShortURL(shortKey)))
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
@@ -90,6 +138,7 @@ func New(database *db.SimpleJSONDB) *chi.Mux {
 	router.Use(logger.WithLoggingHTTPMiddleware)
 	router.Post(`/`, PostShorten)
 	router.Get(`/{short}`, GetRedirecttofullurl)
+	router.Post(`/api/shorten`, PostApishorten)
 
 	return router
 }
