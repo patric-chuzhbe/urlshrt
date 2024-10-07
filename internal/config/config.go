@@ -4,6 +4,8 @@ import (
 	"flag"
 	env "github.com/caarlos0/env/v6"
 	validator "github.com/go-playground/validator/v10"
+	"github.com/joho/godotenv"
+	"log"
 )
 
 type config struct {
@@ -56,6 +58,12 @@ func Init(optionsProto ...InitOption) error {
 	for _, protoOption := range optionsProto {
 		protoOption(options)
 	}
+
+	err := godotenv.Load()
+	if err != nil {
+		log.Printf("Unable to load .env file: %v", err)
+	}
+
 	Values = config{
 		RunAddr:      ":8080",
 		ShortURLBase: "http://localhost:8080",
@@ -69,7 +77,7 @@ func Init(optionsProto ...InitOption) error {
 	}
 
 	var valuesFromEnv config
-	err := env.Parse(&valuesFromEnv)
+	err = env.Parse(&valuesFromEnv)
 	if err != nil {
 		return err
 	}

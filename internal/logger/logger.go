@@ -3,6 +3,7 @@ package logger
 import (
 	"go.uber.org/zap"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -47,8 +48,7 @@ func Init(level string) error {
 }
 
 func Sync() error {
-	err := Log.Sync()
-	if err != nil {
+	if err := Log.Sync(); err != nil && err != os.ErrInvalid {
 		return err
 	}
 

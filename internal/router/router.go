@@ -3,13 +3,14 @@ package router
 import (
 	"encoding/json"
 	"errors"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-playground/validator/v10"
+	chi "github.com/go-chi/chi/v5"
+	validator "github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
-	"github.com/patric-chuzhbe/urlshrt/internal/config"
-	"github.com/patric-chuzhbe/urlshrt/internal/db"
-	"github.com/patric-chuzhbe/urlshrt/internal/logger"
-	"github.com/patric-chuzhbe/urlshrt/internal/models"
+	config "github.com/patric-chuzhbe/urlshrt/internal/config"
+	db "github.com/patric-chuzhbe/urlshrt/internal/db"
+	gzippedHttp "github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
+	logger "github.com/patric-chuzhbe/urlshrt/internal/logger"
+	models "github.com/patric-chuzhbe/urlshrt/internal/models"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
@@ -135,10 +136,13 @@ func PostShorten(res http.ResponseWriter, req *http.Request) {
 func New(database *db.SimpleJSONDB) *chi.Mux {
 	theDB = database
 	router := chi.NewRouter()
-	router.Use(logger.WithLoggingHTTPMiddleware)
-	router.Post(`/`, PostShorten)
+	router.Use(
+		logger.WithLoggingHTTPMiddleware,
+		gzippedHttp.UngzipJSONAndTextHTMLRequest,
+	)
+	router.With(gzippedHttp.GzipResponse).Post(`/`, PostShorten)
 	router.Get(`/{short}`, GetRedirecttofullurl)
-	router.Post(`/api/shorten`, PostApishorten)
+	router.With(gzippedHttp.GzipResponse).Post(`/api/shorten`, PostApishorten)
 
 	return router
 }

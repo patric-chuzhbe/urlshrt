@@ -72,7 +72,6 @@ func main() {
 		"server running",
 		"RunAddr", config.Values.RunAddr,
 	)
-
 	err = http.ListenAndServe(config.Values.RunAddr, httpHandler)
 	if err != nil {
 		panic(err)
