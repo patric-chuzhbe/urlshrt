@@ -6,18 +6,27 @@ import (
 	validator "github.com/go-playground/validator/v10"
 	"github.com/joho/godotenv"
 	"log"
+	"os"
 )
 
 type config struct {
 	RunAddr      string `env:"SERVER_ADDRESS" validate:"hostname_port"`
 	ShortURLBase string `env:"BASE_URL" validate:"url"`
 	LogLevel     string `env:"LOG_LEVEL" validate:"loglevel"`
+	DBFileName   string `env:"FILE_STORAGE_PATH" validate:"filepath"`
 }
 
 var Values config
 
-func validateLogLevel(fl validator.FieldLevel) bool {
-	value := fl.Field().String()
+func validateFilePath(fieldLevel validator.FieldLevel) bool {
+	path := fieldLevel.Field().String()
+	_, err := os.Stat(path)
+
+	return err == nil || os.IsNotExist(err)
+}
+
+func validateLogLevel(fieldLevel validator.FieldLevel) bool {
+	value := fieldLevel.Field().String()
 
 	allowedLogLevels := map[string]bool{
 		"debug":   true,
@@ -32,10 +41,17 @@ func validateLogLevel(fl validator.FieldLevel) bool {
 
 func validate() error {
 	validate := validator.New()
+
 	err := validate.RegisterValidation("loglevel", validateLogLevel)
 	if err != nil {
 		return err
 	}
+
+	err = validate.RegisterValidation("filepath", validateFilePath)
+	if err != nil {
+		return err
+	}
+
 	return validate.Struct(Values)
 }
 
@@ -68,11 +84,13 @@ func Init(optionsProto ...InitOption) error {
 		RunAddr:      ":8080",
 		ShortURLBase: "http://localhost:8080",
 		LogLevel:     "info",
+		DBFileName:   "db.json",
 	}
 	if !options.disableFlagsParsing {
 		flag.StringVar(&Values.RunAddr, "a", Values.RunAddr, "address and port to run server")
 		flag.StringVar(&Values.ShortURLBase, "b", Values.ShortURLBase, "base address of the resulting shortened URL")
 		flag.StringVar(&Values.LogLevel, "l", Values.LogLevel, "logger level")
+		flag.StringVar(&Values.DBFileName, "f", Values.DBFileName, "JSON file name with database")
 		flag.Parse()
 	}
 
@@ -92,6 +110,10 @@ func Init(optionsProto ...InitOption) error {
 
 	if valuesFromEnv.LogLevel != "" {
 		Values.LogLevel = valuesFromEnv.LogLevel
+	}
+
+	if valuesFromEnv.DBFileName != "" {
+		Values.DBFileName = valuesFromEnv.DBFileName
 	}
 
 	return validate()

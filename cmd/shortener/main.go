@@ -12,10 +12,6 @@ import (
 	"syscall"
 )
 
-const (
-	DBFileName = "db.json"
-)
-
 var theDB *db.SimpleJSONDB
 
 func main() {
@@ -37,7 +33,7 @@ func main() {
 		}
 	}()
 
-	theDB, err = db.NewSimpleJSONDB(DBFileName)
+	theDB, err = db.NewSimpleJSONDB(config.Values.DBFileName)
 	if err != nil {
 		panic(err)
 	}
