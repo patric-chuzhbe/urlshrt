@@ -17,7 +17,9 @@ import (
 	"regexp"
 )
 
-var theDB *db.SimpleJSONDB
+type router struct {
+	theDB *db.SimpleJSONDB
+}
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
 
@@ -25,7 +27,7 @@ func getShortURL(shortKey string) string {
 	return config.Values.ShortURLBase + "/" + shortKey
 }
 
-func PostApishorten(response http.ResponseWriter, request *http.Request) {
+func (theRouter router) PostApishorten(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		logger.Log.Debug("got request with bad method", zap.String("method", request.Method))
 		response.WriteHeader(http.StatusMethodNotAllowed)
@@ -47,11 +49,7 @@ func PostApishorten(response http.ResponseWriter, request *http.Request) {
 	}
 
 	urlToShort := requestDTO.URL
-	shortKey, err := getShortKey(urlToShort)
-	if err != nil {
-		http.Error(response, err.Error(), http.StatusBadRequest)
-		return
-	}
+	shortKey := theRouter.getShortKey(urlToShort)
 	shortURL := getShortURL(shortKey)
 
 	responseDTO := models.Response{Result: shortURL}
@@ -65,9 +63,9 @@ func PostApishorten(response http.ResponseWriter, request *http.Request) {
 	}
 }
 
-func GetRedirecttofullurl(res http.ResponseWriter, req *http.Request) {
+func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.Request) {
 	short := chi.URLParam(req, "short")
-	full, found := theDB.FindFullByShort(short)
+	full, found := theRouter.theDB.FindFullByShort(short)
 	if !found {
 		res.WriteHeader(http.StatusNotFound)
 		return
@@ -75,15 +73,15 @@ func GetRedirecttofullurl(res http.ResponseWriter, req *http.Request) {
 	http.Redirect(res, req, full, http.StatusTemporaryRedirect)
 }
 
-func getShortKey(urlToShort string) (string, error) {
-	short, found := theDB.FindShortByFull(urlToShort)
+func (theRouter router) getShortKey(urlToShort string) string {
+	short, found := theRouter.theDB.FindShortByFull(urlToShort)
 	if found {
-		return short, nil
+		return short
 	}
 	short = uuid.New().String()
-	theDB.Insert(short, urlToShort)
+	theRouter.theDB.Insert(short, urlToShort)
 
-	return short, nil
+	return short
 }
 
 func extractFirstURL(urlToShort string) (string, error) {
@@ -111,18 +109,14 @@ func getURLToShort(req *http.Request) (string, error) {
 	return urlToShortAsString, nil
 }
 
-func PostShorten(res http.ResponseWriter, req *http.Request) {
+func (theRouter router) PostShorten(res http.ResponseWriter, req *http.Request) {
 	urlToShort, err := getURLToShort(req)
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	shortKey, err := getShortKey(urlToShort)
-	if err != nil {
-		http.Error(res, err.Error(), http.StatusBadRequest)
-		return
-	}
+	shortKey := theRouter.getShortKey(urlToShort)
 
 	res.WriteHeader(http.StatusCreated)
 
@@ -134,15 +128,17 @@ func PostShorten(res http.ResponseWriter, req *http.Request) {
 }
 
 func New(database *db.SimpleJSONDB) *chi.Mux {
-	theDB = database
+	myRouter := router{
+		theDB: database,
+	}
 	router := chi.NewRouter()
 	router.Use(
 		logger.WithLoggingHTTPMiddleware,
 		gzippedHttp.UngzipJSONAndTextHTMLRequest,
 	)
-	router.With(gzippedHttp.GzipResponse).Post(`/`, PostShorten)
-	router.Get(`/{short}`, GetRedirecttofullurl)
-	router.With(gzippedHttp.GzipResponse).Post(`/api/shorten`, PostApishorten)
+	router.With(gzippedHttp.GzipResponse).Post(`/`, myRouter.PostShorten)
+	router.Get(`/{short}`, myRouter.GetRedirecttofullurl)
+	router.With(gzippedHttp.GzipResponse).Post(`/api/shorten`, myRouter.PostApishorten)
 
 	return router
 }

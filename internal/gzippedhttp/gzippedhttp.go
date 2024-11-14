@@ -84,11 +84,6 @@ func GzipResponse(h http.Handler) http.Handler {
 	return http.HandlerFunc(middleware)
 }
 
-func checkIfRequestContentTypeIsJSONOrTextHTML(request *http.Request) bool {
-	contentType := request.Header.Get("Content-Type")
-	return strings.Contains(contentType, "application/json") || strings.Contains(contentType, "text/html")
-}
-
 func UngzipJSONAndTextHTMLRequest(h http.Handler) http.Handler {
 	middleware := func(response http.ResponseWriter, request *http.Request) {
 		contentEncoding := request.Header.Get("Content-Encoding")

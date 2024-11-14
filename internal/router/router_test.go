@@ -26,21 +26,6 @@ const (
 	testDBFileName = "db_test.json"
 )
 
-func gunzipBytes(input []byte) []byte {
-	gzipReader, err := gzip.NewReader(bytes.NewReader(input))
-	if err != nil {
-		panic(err)
-	}
-	defer gzipReader.Close()
-
-	result, err := io.ReadAll(gzipReader)
-	if err != nil {
-		panic(err)
-	}
-
-	return result
-}
-
 func gzipString(input string) []byte {
 	var buf bytes.Buffer
 	gzipWriter := gzip.NewWriter(&buf)
@@ -91,21 +76,8 @@ func TestPostApishortenForGzip(t *testing.T) {
 		},
 	}
 
-	router := chi.NewRouter()
-	router.Use(
-		logger.WithLoggingHTTPMiddleware,
-		gzippedhttp.UngzipJSONAndTextHTMLRequest,
-	)
-	router.With(gzippedhttp.GzipResponse).Post(`/api/shorten`, PostApishorten)
-
-	srv := httptest.NewServer(router)
-	defer srv.Close()
-
-	err = logger.Init("debug")
-	require.NoError(t, err)
-
 	// The DB
-	theDB, err = db.NewSimpleJSONDB(testDBFileName)
+	theDB, err := db.NewSimpleJSONDB(testDBFileName)
 	require.NoError(t, err)
 	require.NotNil(t, theDB)
 	defer func() {
@@ -114,6 +86,23 @@ func TestPostApishortenForGzip(t *testing.T) {
 		err = os.Remove(testDBFileName)
 		require.NoError(t, err)
 	}()
+
+	myRouter := router{
+		theDB: theDB,
+	}
+
+	router := chi.NewRouter()
+	router.Use(
+		logger.WithLoggingHTTPMiddleware,
+		gzippedhttp.UngzipJSONAndTextHTMLRequest,
+	)
+	router.With(gzippedhttp.GzipResponse).Post(`/api/shorten`, myRouter.PostApishorten)
+
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	err = logger.Init("debug")
+	require.NoError(t, err)
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -225,15 +214,8 @@ func TestPostApishorten(t *testing.T) {
 		},
 	}
 
-	handler := http.HandlerFunc(PostApishorten)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
-
-	err = logger.Init("debug")
-	require.NoError(t, err)
-
 	// The DB
-	theDB, err = db.NewSimpleJSONDB(testDBFileName)
+	theDB, err := db.NewSimpleJSONDB(testDBFileName)
 	require.NoError(t, err)
 	require.NotNil(t, theDB)
 	defer func() {
@@ -242,6 +224,17 @@ func TestPostApishorten(t *testing.T) {
 		err = os.Remove(testDBFileName)
 		require.NoError(t, err)
 	}()
+
+	myRouter := router{
+		theDB: theDB,
+	}
+
+	handler := http.HandlerFunc(myRouter.PostApishorten)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	err = logger.Init("debug")
+	require.NoError(t, err)
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -375,7 +368,7 @@ eshche odna stroka
 			var err error
 
 			// The DB
-			theDB, err = db.NewSimpleJSONDB(testDBFileName)
+			theDB, err := db.NewSimpleJSONDB(testDBFileName)
 			require.NoError(t, err)
 			require.NotNil(t, theDB)
 			defer func() {
@@ -384,6 +377,10 @@ eshche odna stroka
 				err = os.Remove(testDBFileName)
 				require.NoError(t, err)
 			}()
+
+			myRouter := router{
+				theDB: theDB,
+			}
 
 			var shortURL []byte
 
@@ -396,7 +393,7 @@ eshche odna stroka
 				)
 				w := httptest.NewRecorder()
 				router := chi.NewRouter()
-				router.Post("/", PostShorten)
+				router.Post("/", myRouter.PostShorten)
 				router.ServeHTTP(w, request)
 
 				result := w.Result()
@@ -427,7 +424,7 @@ eshche odna stroka
 
 				w := httptest.NewRecorder()
 				router := chi.NewRouter()
-				router.Get("/{short}", GetRedirecttofullurl)
+				router.Get("/{short}", myRouter.GetRedirecttofullurl)
 				router.ServeHTTP(w, request)
 
 				result := w.Result()
