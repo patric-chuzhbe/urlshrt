@@ -7,13 +7,16 @@ import (
 	"github.com/joho/godotenv"
 	"log"
 	"os"
+	"time"
 )
 
 type config struct {
-	RunAddr      string `env:"SERVER_ADDRESS" validate:"hostname_port"`
-	ShortURLBase string `env:"BASE_URL" validate:"url"`
-	LogLevel     string `env:"LOG_LEVEL" validate:"loglevel"`
-	DBFileName   string `env:"FILE_STORAGE_PATH" validate:"filepath"`
+	RunAddr             string        `env:"SERVER_ADDRESS" validate:"hostname_port"`
+	ShortURLBase        string        `env:"BASE_URL" validate:"url"`
+	LogLevel            string        `env:"LOG_LEVEL" validate:"loglevel"`
+	DBFileName          string        `env:"FILE_STORAGE_PATH" validate:"filepath"`
+	DatabaseDSN         string        `env:"DATABASE_DSN"`
+	DBConnectionTimeout time.Duration `env:"DB_CONNECTION_TIMEOUT"`
 }
 
 var Values config
@@ -81,16 +84,19 @@ func Init(optionsProto ...InitOption) error {
 	}
 
 	Values = config{
-		RunAddr:      ":8080",
-		ShortURLBase: "http://localhost:8080",
-		LogLevel:     "info",
-		DBFileName:   "db.json",
+		RunAddr:             ":8080",
+		ShortURLBase:        "http://localhost:8080",
+		LogLevel:            "info",
+		DBFileName:          "db.json",
+		DatabaseDSN:         "",
+		DBConnectionTimeout: 10,
 	}
 	if !options.disableFlagsParsing {
 		flag.StringVar(&Values.RunAddr, "a", Values.RunAddr, "address and port to run server")
 		flag.StringVar(&Values.ShortURLBase, "b", Values.ShortURLBase, "base address of the resulting shortened URL")
 		flag.StringVar(&Values.LogLevel, "l", Values.LogLevel, "logger level")
 		flag.StringVar(&Values.DBFileName, "f", Values.DBFileName, "JSON file name with database")
+		flag.StringVar(&Values.DatabaseDSN, "d", Values.DatabaseDSN, "A string with the database connection details")
 		flag.Parse()
 	}
 
@@ -114,6 +120,14 @@ func Init(optionsProto ...InitOption) error {
 
 	if valuesFromEnv.DBFileName != "" {
 		Values.DBFileName = valuesFromEnv.DBFileName
+	}
+
+	if valuesFromEnv.DatabaseDSN != "" {
+		Values.DatabaseDSN = valuesFromEnv.DatabaseDSN
+	}
+
+	if valuesFromEnv.DBConnectionTimeout != 0 {
+		Values.DBConnectionTimeout = valuesFromEnv.DBConnectionTimeout
 	}
 
 	return validate()

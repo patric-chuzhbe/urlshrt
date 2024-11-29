@@ -7,9 +7,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	resty "github.com/go-resty/resty/v2"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
-	"github.com/patric-chuzhbe/urlshrt/internal/db"
 	"github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
+	"github.com/patric-chuzhbe/urlshrt/internal/simplejsondb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -77,11 +77,11 @@ func TestPostApishortenForGzip(t *testing.T) {
 	}
 
 	// The DB
-	theDB, err := db.NewSimpleJSONDB(testDBFileName)
+	theDB, err := simplejsondb.New(testDBFileName)
 	require.NoError(t, err)
 	require.NotNil(t, theDB)
 	defer func() {
-		err := theDB.SaveIntoFile()
+		err := theDB.Close()
 		require.NoError(t, err)
 		err = os.Remove(testDBFileName)
 		require.NoError(t, err)
@@ -215,11 +215,11 @@ func TestPostApishorten(t *testing.T) {
 	}
 
 	// The DB
-	theDB, err := db.NewSimpleJSONDB(testDBFileName)
+	theDB, err := simplejsondb.New(testDBFileName)
 	require.NoError(t, err)
 	require.NotNil(t, theDB)
 	defer func() {
-		err := theDB.SaveIntoFile()
+		err := theDB.Close()
 		require.NoError(t, err)
 		err = os.Remove(testDBFileName)
 		require.NoError(t, err)
@@ -368,11 +368,11 @@ eshche odna stroka
 			var err error
 
 			// The DB
-			theDB, err := db.NewSimpleJSONDB(testDBFileName)
+			theDB, err := simplejsondb.New(testDBFileName)
 			require.NoError(t, err)
 			require.NotNil(t, theDB)
 			defer func() {
-				err := theDB.SaveIntoFile()
+				err := theDB.Close()
 				require.NoError(t, err)
 				err = os.Remove(testDBFileName)
 				require.NoError(t, err)

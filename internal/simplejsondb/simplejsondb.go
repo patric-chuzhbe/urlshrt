@@ -1,6 +1,7 @@
-package db
+package simplejsondb
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -67,7 +68,7 @@ func parseJSONFile(fileName string, cacheMap *CacheStruct) error {
 	return nil
 }
 
-func NewSimpleJSONDB(fileName string) (*SimpleJSONDB, error) {
+func New(fileName string) (*SimpleJSONDB, error) {
 	simpleJSONDB := SimpleJSONDB{
 		fileName: fileName,
 		cache:    CacheStruct{},
@@ -91,12 +92,16 @@ func NewSimpleJSONDB(fileName string) (*SimpleJSONDB, error) {
 	return &simpleJSONDB, nil
 }
 
+func (db *SimpleJSONDB) Ping(outerCtx context.Context) error {
+	return nil
+}
+
 func (db *SimpleJSONDB) Insert(short, full string) {
 	db.cache.ShortToFull[short] = full
 	db.cache.FullToShort[full] = short
 }
 
-func (db *SimpleJSONDB) SaveIntoFile() error {
+func (db *SimpleJSONDB) Close() error {
 	err := writeToJSONFile(db.fileName, db.cache)
 	if err != nil {
 		return err

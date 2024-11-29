@@ -1,16 +1,17 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	chi "github.com/go-chi/chi/v5"
 	validator "github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	config "github.com/patric-chuzhbe/urlshrt/internal/config"
-	db "github.com/patric-chuzhbe/urlshrt/internal/db"
 	gzippedHttp "github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
 	logger "github.com/patric-chuzhbe/urlshrt/internal/logger"
 	models "github.com/patric-chuzhbe/urlshrt/internal/models"
+	"github.com/patric-chuzhbe/urlshrt/internal/storage"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
@@ -18,13 +19,23 @@ import (
 )
 
 type router struct {
-	theDB *db.SimpleJSONDB
+	theDB storage.Storage /* *simplejsondb.SimpleJSONDB */
 }
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
 
 func getShortURL(shortKey string) string {
 	return config.Values.ShortURLBase + "/" + shortKey
+}
+
+func (theRouter router) GetPing(response http.ResponseWriter, request *http.Request) {
+	err := theRouter.theDB.Ping(context.Background())
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+
+		return
+	}
+	response.WriteHeader(http.StatusOK)
 }
 
 func (theRouter router) PostApishorten(response http.ResponseWriter, request *http.Request) {
@@ -127,7 +138,7 @@ func (theRouter router) PostShorten(res http.ResponseWriter, req *http.Request) 
 	}
 }
 
-func New(database *db.SimpleJSONDB) *chi.Mux {
+func New(database storage.Storage) *chi.Mux {
 	myRouter := router{
 		theDB: database,
 	}
@@ -139,6 +150,7 @@ func New(database *db.SimpleJSONDB) *chi.Mux {
 	router.With(gzippedHttp.GzipResponse).Post(`/`, myRouter.PostShorten)
 	router.Get(`/{short}`, myRouter.GetRedirecttofullurl)
 	router.With(gzippedHttp.GzipResponse).Post(`/api/shorten`, myRouter.PostApishorten)
+	router.Get(`/ping`, myRouter.GetPing)
 
 	return router
 }
