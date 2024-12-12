@@ -3,10 +3,10 @@ package storage
 import "context"
 
 type Storage interface {
-	Insert(short, full string)
+	Insert(outerCtx context.Context, short, full string) error
 	Close() error
-	FindFullByShort(short string) (full string, found bool)
-	FindShortByFull(full string) (short string, found bool)
-	IsShortExists(short string) bool
+	FindFullByShort(outerCtx context.Context, short string) (string, bool, error)
+	FindShortByFull(outerCtx context.Context, full string) (string, bool, error)
+	IsShortExists(outerCtx context.Context, short string) (bool, error)
 	Ping(outerCtx context.Context) error
 }

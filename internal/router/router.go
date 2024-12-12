@@ -60,7 +60,12 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 	}
 
 	urlToShort := requestDTO.URL
-	shortKey := theRouter.getShortKey(urlToShort)
+	shortKey, err := theRouter.getShortKey(urlToShort)
+	if err != nil {
+		logger.Log.Debugln("error while `theRouter.getShortKey()` calling: ", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	shortURL := getShortURL(shortKey)
 
 	responseDTO := models.Response{Result: shortURL}
@@ -76,7 +81,12 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 
 func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.Request) {
 	short := chi.URLParam(req, "short")
-	full, found := theRouter.theDB.FindFullByShort(short)
+	full, found, err := theRouter.theDB.FindFullByShort(context.Background(), short)
+	if err != nil {
+		logger.Log.Debugln("error while `theRouter.theDB.FindFullByShort()` calling: ", zap.Error(err))
+		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	if !found {
 		res.WriteHeader(http.StatusNotFound)
 		return
@@ -84,15 +94,21 @@ func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.
 	http.Redirect(res, req, full, http.StatusTemporaryRedirect)
 }
 
-func (theRouter router) getShortKey(urlToShort string) string {
-	short, found := theRouter.theDB.FindShortByFull(urlToShort)
+func (theRouter router) getShortKey(urlToShort string) (string, error) {
+	short, found, err := theRouter.theDB.FindShortByFull(context.Background(), urlToShort)
+	if err != nil {
+		return "", err
+	}
 	if found {
-		return short
+		return short, nil
 	}
 	short = uuid.New().String()
-	theRouter.theDB.Insert(short, urlToShort)
+	err = theRouter.theDB.Insert(context.Background(), short, urlToShort)
+	if err != nil {
+		return "", err
+	}
 
-	return short
+	return short, nil
 }
 
 func extractFirstURL(urlToShort string) (string, error) {
@@ -127,7 +143,12 @@ func (theRouter router) PostShorten(res http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	shortKey := theRouter.getShortKey(urlToShort)
+	shortKey, err := theRouter.getShortKey(urlToShort)
+	if err != nil {
+		logger.Log.Debugln("error while `theRouter.getShortKey()` calling: ", zap.Error(err))
+		http.Error(res, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	res.WriteHeader(http.StatusCreated)
 

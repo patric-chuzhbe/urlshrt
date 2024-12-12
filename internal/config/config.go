@@ -87,7 +87,7 @@ func Init(optionsProto ...InitOption) error {
 		RunAddr:             ":8080",
 		ShortURLBase:        "http://localhost:8080",
 		LogLevel:            "info",
-		DBFileName:          "db.json",
+		DBFileName:          "",
 		DatabaseDSN:         "",
 		DBConnectionTimeout: 10,
 	}

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
+	"github.com/patric-chuzhbe/urlshrt/internal/memorystorage"
 	"github.com/patric-chuzhbe/urlshrt/internal/postgresdb"
 	"github.com/patric-chuzhbe/urlshrt/internal/router"
+	"github.com/patric-chuzhbe/urlshrt/internal/simplejsondb"
 	"github.com/patric-chuzhbe/urlshrt/internal/storage"
 	"net/http"
 	"os"
@@ -14,6 +17,43 @@ import (
 )
 
 var theDB storage.Storage
+
+const (
+	StorageTypePostgresql = iota
+	StorageTypeFile
+	StorageTypeMemory
+)
+
+func getTheMostWantedOfAvailableStorageType() int {
+	if config.Values.DatabaseDSN != "" {
+		return StorageTypePostgresql
+	}
+
+	if config.Values.DBFileName != "" {
+		return StorageTypeFile
+	}
+
+	return StorageTypeMemory
+}
+
+func getTheMostWantedOfAvailableStorage() (storage.Storage, error) {
+	switch getTheMostWantedOfAvailableStorageType() {
+	case StorageTypePostgresql:
+		return postgresdb.New(
+			context.Background(),
+			postgresdb.Config{
+				FileStoragePath:   config.Values.DBFileName,
+				DatabaseDSN:       config.Values.DatabaseDSN,
+				ConnectionTimeout: config.Values.DBConnectionTimeout,
+			},
+		)
+	case StorageTypeFile:
+		return simplejsondb.New(config.Values.DBFileName)
+	}
+
+	//case StorageTypeMemory:
+	return memorystorage.New()
+}
 
 func main() {
 	var err error
@@ -34,11 +74,7 @@ func main() {
 		}
 	}()
 
-	theDB, err = postgresdb.New(postgresdb.Config{
-		FileStoragePath:   config.Values.DBFileName,
-		DatabaseDSN:       config.Values.DatabaseDSN,
-		ConnectionTimeout: config.Values.DBConnectionTimeout,
-	})
+	theDB, err = getTheMostWantedOfAvailableStorage()
 	if err != nil {
 		panic(err)
 	}
@@ -46,7 +82,7 @@ func main() {
 		if p := recover(); p != nil {
 			err := theDB.Close()
 			if err != nil {
-				fmt.Println("Error saving database to file:", err)
+				fmt.Println("Error closing database:", err)
 			}
 		}
 	}()
@@ -55,7 +91,8 @@ func main() {
 
 	// Handle SIGINT signal (Ctrl+C)
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	//signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		<-sigCh

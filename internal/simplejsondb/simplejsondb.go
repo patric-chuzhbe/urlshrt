@@ -9,7 +9,7 @@ import (
 
 type SimpleJSONDB struct {
 	fileName string
-	cache    CacheStruct
+	Cache    CacheStruct
 }
 
 type CacheStruct struct {
@@ -71,10 +71,10 @@ func parseJSONFile(fileName string, cacheMap *CacheStruct) error {
 func New(fileName string) (*SimpleJSONDB, error) {
 	simpleJSONDB := SimpleJSONDB{
 		fileName: fileName,
-		cache:    CacheStruct{},
+		Cache:    CacheStruct{},
 	}
 
-	err := parseJSONFile(simpleJSONDB.fileName, &simpleJSONDB.cache)
+	err := parseJSONFile(simpleJSONDB.fileName, &simpleJSONDB.Cache)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, err
@@ -83,7 +83,7 @@ func New(fileName string) (*SimpleJSONDB, error) {
 		if err != nil {
 			return nil, err
 		}
-		err = parseJSONFile(simpleJSONDB.fileName, &simpleJSONDB.cache)
+		err = parseJSONFile(simpleJSONDB.fileName, &simpleJSONDB.Cache)
 		if err != nil {
 			return nil, err
 		}
@@ -96,13 +96,15 @@ func (db *SimpleJSONDB) Ping(outerCtx context.Context) error {
 	return nil
 }
 
-func (db *SimpleJSONDB) Insert(short, full string) {
-	db.cache.ShortToFull[short] = full
-	db.cache.FullToShort[full] = short
+func (db *SimpleJSONDB) Insert(outerCtx context.Context, short, full string) error {
+	db.Cache.ShortToFull[short] = full
+	db.Cache.FullToShort[full] = short
+
+	return nil
 }
 
 func (db *SimpleJSONDB) Close() error {
-	err := writeToJSONFile(db.fileName, db.cache)
+	err := writeToJSONFile(db.fileName, db.Cache)
 	if err != nil {
 		return err
 	}
@@ -110,17 +112,22 @@ func (db *SimpleJSONDB) Close() error {
 	return nil
 }
 
-func (db *SimpleJSONDB) FindFullByShort(short string) (full string, found bool) {
-	full, found = db.cache.ShortToFull[short]
+func (db *SimpleJSONDB) FindFullByShort(outerCtx context.Context, short string) (full string, found bool, err error) {
+	full, found = db.Cache.ShortToFull[short]
+	err = nil
+
 	return
 }
 
-func (db *SimpleJSONDB) FindShortByFull(full string) (short string, found bool) {
-	short, found = db.cache.FullToShort[full]
+func (db *SimpleJSONDB) FindShortByFull(outerCtx context.Context, full string) (short string, found bool, err error) {
+	short, found = db.Cache.FullToShort[full]
+	err = nil
+
 	return
 }
 
-func (db *SimpleJSONDB) IsShortExists(short string) bool {
-	_, exists := db.cache.ShortToFull[short]
-	return exists
+func (db *SimpleJSONDB) IsShortExists(outerCtx context.Context, short string) (bool, error) {
+	_, exists := db.Cache.ShortToFull[short]
+
+	return exists, nil
 }
