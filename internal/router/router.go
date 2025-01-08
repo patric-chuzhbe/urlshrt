@@ -12,6 +12,7 @@ import (
 	logger "github.com/patric-chuzhbe/urlshrt/internal/logger"
 	models "github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/storage"
+	"github.com/thoas/go-funk"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
@@ -19,10 +20,132 @@ import (
 )
 
 type router struct {
-	theDB storage.Storage /* *simplejsondb.SimpleJSONDB */
+	theDB storage.Storage
 }
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
+
+func fillThePostApishortenbatchResponse(
+	response *models.PostApishortenbatchResponse,
+	fullsToShortsMap map[string]string,
+	originalURLToCorrelationIDMap map[string]string,
+) {
+	for full, short := range fullsToShortsMap {
+		*response = append(
+			*response,
+			models.ShortURLToCorrelationID{
+				CorrelationID: originalURLToCorrelationIDMap[full],
+				ShortURL:      getShortURL(short),
+			},
+		)
+	}
+}
+
+func (theRouter router) getPostApishortenbatchResponse(
+	existentFullsToShortsMap map[string]string,
+	unexistentFullsToShortsMap map[string]string,
+	originalURLToCorrelationIDMap map[string]string,
+) models.PostApishortenbatchResponse {
+	result := models.PostApishortenbatchResponse{}
+	fillThePostApishortenbatchResponse(&result, existentFullsToShortsMap, originalURLToCorrelationIDMap)
+	fillThePostApishortenbatchResponse(&result, unexistentFullsToShortsMap, originalURLToCorrelationIDMap)
+
+	return result
+}
+
+func (theRouter router) getUnexistentFullsToShortsMap(unexistentFulls []string) map[string]string {
+	result := map[string]string{}
+	for _, full := range unexistentFulls {
+		result[full] = uuid.New().String()
+	}
+
+	return result
+}
+
+func (theRouter router) getOriginalURLToCorrelationIDMap(requestDTO models.PostApishortenbatchRequest) map[string]string {
+	result := map[string]string{}
+	for _, originalURLToCorrelationID := range requestDTO {
+		result[originalURLToCorrelationID.OriginalURL] = originalURLToCorrelationID.CorrelationID
+	}
+
+	return result
+}
+
+func (theRouter router) PostApishortenbatch(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		logger.Log.Debug("got request with bad method", zap.String("method", request.Method))
+		response.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var requestDTO models.PostApishortenbatchRequest
+	if err := json.NewDecoder(request.Body).Decode(&requestDTO); err != nil {
+		logger.Log.Debugln("cannot decode request JSON body", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	validate := validator.New()
+	if err := validate.Var(requestDTO, "dive"); err != nil {
+		logger.Log.Debugln("incorrect request structure", zap.Error(err))
+		response.WriteHeader(http.StatusUnprocessableEntity)
+		return
+	}
+
+	transaction, err := theRouter.theDB.BeginTransaction()
+	if err != nil {
+		logger.Log.Debugln("Error calling the `theRouter.theDB.BeginTransaction()`: ", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	originalURLToCorrelationIDMap := theRouter.getOriginalURLToCorrelationIDMap(requestDTO)
+
+	originalUrls := funk.Keys(originalURLToCorrelationIDMap).([]string)
+
+	existentFullsToShortsMap, err := theRouter.theDB.FindShortsByFulls(context.Background(), originalUrls, transaction)
+	if err != nil {
+		logger.Log.Debugln("Error calling the `theRouter.theDB.FindShortsByFulls()`: ", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	unexistentFullsAsInterface, _ := funk.Difference(
+		originalUrls,
+		funk.Keys(existentFullsToShortsMap).([]string),
+	)
+	unexistentFulls := unexistentFullsAsInterface.([]string)
+
+	unexistentFullsToShortsMap := theRouter.getUnexistentFullsToShortsMap(unexistentFulls)
+
+	err = theRouter.theDB.SaveNewFullsAndShorts(context.Background(), unexistentFullsToShortsMap, transaction)
+	if err != nil {
+		logger.Log.Debugln("Error calling the `theRouter.theDB.SaveNewFullsAndShorts()`: ", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	responseDTO := theRouter.getPostApishortenbatchResponse(
+		existentFullsToShortsMap,
+		unexistentFullsToShortsMap,
+		originalURLToCorrelationIDMap,
+	)
+
+	err = transaction.Commit()
+	if err != nil {
+		logger.Log.Debugln("Error calling the `transaction.Commit()`: ", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusCreated)
+
+	if err := json.NewEncoder(response).Encode(responseDTO); err != nil {
+		logger.Log.Debug("error encoding response", zap.Error(err))
+		return
+	}
+}
 
 func getShortURL(shortKey string) string {
 	return config.Values.ShortURLBase + "/" + shortKey
@@ -172,6 +295,7 @@ func New(database storage.Storage) *chi.Mux {
 	router.Get(`/{short}`, myRouter.GetRedirecttofullurl)
 	router.With(gzippedHttp.GzipResponse).Post(`/api/shorten`, myRouter.PostApishorten)
 	router.Get(`/ping`, myRouter.GetPing)
+	router.With(gzippedHttp.GzipResponse).Post(`/api/shorten/batch`, myRouter.PostApishortenbatch)
 
 	return router
 }

@@ -19,6 +19,51 @@ func Test(t *testing.T) {
 		assert.True(t, found)
 		assert.Equal(t, "some short", short, "Should be equal to `some short`")
 
+		shorts, err := theStorage.FindShortsByFulls(
+			context.Background(),
+			[]string{"some full", "some unexistent full"},
+			nil,
+		)
+		assert.NoError(t, err, "The `theStorage.FindShortsByFulls()` should not return error")
+		assert.Equal(
+			t,
+			map[string]string{"some full": "some short"},
+			shorts,
+			"Should be equal to map[string]string{\"some full\": \"some short\"}",
+		)
+
+		err = theStorage.SaveNewFullsAndShorts(
+			context.Background(),
+			map[string]string{
+				"one":   "1-1-1",
+				"two":   "2-2-2",
+				"three": "3-3-3",
+			},
+			nil,
+		)
+		assert.NoError(t, err, "The `theStorage.SaveNewFullsAndShorts()` should not return error")
+
+		shortsByFulls, err := theStorage.FindShortsByFulls(
+			context.Background(),
+			[]string{
+				"one",
+				"two",
+				"three",
+			},
+			nil,
+		)
+		assert.NoError(t, err, "The `theStorage.FindShortsByFulls()` should not return error")
+		assert.Equal(
+			t,
+			map[string]string{
+				"one":   "1-1-1",
+				"two":   "2-2-2",
+				"three": "3-3-3",
+			},
+			shortsByFulls,
+			"the `theStorage.FindShortsByFulls()`'s result should be equal to the target value",
+		)
+
 		err = theStorage.Ping(context.Background())
 		assert.NoError(t, err, "The memorystorage.Ping() should not return error")
 

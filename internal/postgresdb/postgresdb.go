@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/thoas/go-funk"
+	"strings"
 	"time"
 )
 
@@ -23,6 +25,137 @@ type Config struct {
 const (
 	ShortToFullURLMapTableName = "short_to_full_url_map_s1ble3"
 )
+
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+}
+
+type executor interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+func (pgdb *PostgresDB) BeginTransaction() (*sql.Tx, error) {
+	return pgdb.database.Begin()
+}
+
+func getShortToFullURLMapTableValues(unexistentFullsToShortsMap map[string]string) [][]string {
+	result := [][]string{}
+	for full, short := range unexistentFullsToShortsMap {
+		result = append(result, []string{short, full})
+	}
+
+	return result
+}
+
+func (pgdb *PostgresDB) SaveNewFullsAndShorts(
+	outerCtx context.Context,
+	unexistentFullsToShortsMap map[string]string,
+	transaction *sql.Tx,
+) error {
+	shortToFullURLMapTableValues := getShortToFullURLMapTableValues(unexistentFullsToShortsMap)
+	shortToFullURLMapTableValuesLen := len(shortToFullURLMapTableValues)
+	if shortToFullURLMapTableValuesLen == 0 {
+		return nil
+	}
+	shortToFullURLMapTableValuesPlaceholders := make([]string, len(shortToFullURLMapTableValues))
+	for i := range shortToFullURLMapTableValuesPlaceholders {
+		shortToFullURLMapTableValuesPlaceholders[i] = fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2)
+	}
+	shortToFullURLMapTableValuesPlaceholdersAsString := strings.Join(shortToFullURLMapTableValuesPlaceholders, ",")
+	queryParams := funk.Flatten(shortToFullURLMapTableValues).([]string)
+
+	var database executor
+	if transaction == nil {
+		database = pgdb.database
+	} else {
+		database = transaction
+	}
+
+	_, err := database.ExecContext(
+		outerCtx,
+		fmt.Sprintf(
+			`INSERT INTO "%s" ("short", "full") VALUES %s`,
+			ShortToFullURLMapTableName,
+			shortToFullURLMapTableValuesPlaceholdersAsString,
+		),
+		func(strSlice []string) []interface{} {
+			result := make([]interface{}, len(strSlice))
+			for i, v := range strSlice {
+				result[i] = v
+			}
+
+			return result
+		}(queryParams)...,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (pgdb *PostgresDB) FindShortsByFulls(
+	outerCtx context.Context,
+	originalUrls []string,
+	transaction *sql.Tx,
+) (map[string]string, error) {
+	originalUrlsLen := len(originalUrls)
+	if originalUrlsLen == 0 {
+		return map[string]string{}, nil
+	}
+	originalUrlsPlaceholdersSlice := make([]string, originalUrlsLen)
+	for i := range originalUrls {
+		originalUrlsPlaceholdersSlice[i] = fmt.Sprintf("$%d", i+1)
+	}
+	originalUrlsPlaceholders := strings.Join(originalUrlsPlaceholdersSlice, ",")
+
+	var database queryer
+
+	if transaction == nil {
+		database = pgdb.database
+	} else {
+		database = transaction
+	}
+
+	rows, err := database.QueryContext(
+		outerCtx,
+		fmt.Sprintf(
+			`SELECT "short", "full" FROM "%s" WHERE "full" IN (%s)`,
+			ShortToFullURLMapTableName,
+			originalUrlsPlaceholders,
+		),
+		func(strSlice []string) []interface{} {
+			result := make([]interface{}, len(strSlice))
+			for i, v := range strSlice {
+				result[i] = v
+			}
+
+			return result
+		}(originalUrls)...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := map[string]string{}
+	for rows.Next() {
+		var short, full string
+		err = rows.Scan(&short, &full)
+		if err != nil {
+			return nil, err
+		}
+
+		result[full] = short
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
 
 func (pgdb *PostgresDB) Insert(outerCtx context.Context, short, full string) error {
 	_, err := pgdb.database.ExecContext(

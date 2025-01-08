@@ -2,6 +2,7 @@ package simplejsondb
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +16,44 @@ type SimpleJSONDB struct {
 type CacheStruct struct {
 	ShortToFull map[string]string
 	FullToShort map[string]string
+}
+
+func (db *SimpleJSONDB) BeginTransaction() (*sql.Tx, error) {
+	return nil, nil
+}
+
+func (db *SimpleJSONDB) SaveNewFullsAndShorts(
+	outerCtx context.Context,
+	unexistentFullsToShortsMap map[string]string,
+	transaction *sql.Tx,
+) error {
+	for full, short := range unexistentFullsToShortsMap {
+		err := db.Insert(outerCtx, short, full)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (db *SimpleJSONDB) FindShortsByFulls(
+	outerCtx context.Context,
+	originalUrls []string,
+	transaction *sql.Tx,
+) (map[string]string, error) {
+	result := map[string]string{}
+	for _, full := range originalUrls {
+		short, found, err := db.FindShortByFull(outerCtx, full)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			result[full] = short
+		}
+	}
+
+	return result, nil
 }
 
 func initDBFile(fileName string) error {
