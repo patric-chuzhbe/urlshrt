@@ -28,10 +28,19 @@ const (
 
 type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 type executor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+func (pgdb *PostgresDB) CommitTransaction(transaction *sql.Tx) error {
+	return transaction.Commit()
+}
+
+func (pgdb *PostgresDB) RollbackTransaction(transaction *sql.Tx) error {
+	return transaction.Rollback()
 }
 
 func (pgdb *PostgresDB) BeginTransaction() (*sql.Tx, error) {
@@ -157,8 +166,21 @@ func (pgdb *PostgresDB) FindShortsByFulls(
 	return result, nil
 }
 
-func (pgdb *PostgresDB) Insert(outerCtx context.Context, short, full string) error {
-	_, err := pgdb.database.ExecContext(
+func (pgdb *PostgresDB) Insert(
+	outerCtx context.Context,
+	short,
+	full string,
+	transaction *sql.Tx,
+) error {
+	var database executor
+
+	if transaction == nil {
+		database = pgdb.database
+	} else {
+		database = transaction
+	}
+
+	_, err := database.ExecContext(
 		outerCtx,
 		fmt.Sprintf(
 			`INSERT INTO "%s" ("short", "full") VALUES ($1, $2)`,
@@ -195,8 +217,20 @@ func (pgdb *PostgresDB) FindFullByShort(outerCtx context.Context, short string) 
 	return full, true, nil
 }
 
-func (pgdb *PostgresDB) FindShortByFull(outerCtx context.Context, full string) (string, bool, error) {
-	row := pgdb.database.QueryRowContext(
+func (pgdb *PostgresDB) FindShortByFull(
+	outerCtx context.Context,
+	full string,
+	transaction *sql.Tx,
+) (string, bool, error) {
+	var database queryer
+
+	if transaction == nil {
+		database = pgdb.database
+	} else {
+		database = transaction
+	}
+
+	row := database.QueryRowContext(
 		outerCtx,
 		fmt.Sprintf(
 			`SELECT "short" FROM "%s" WHERE "full" = $1`,

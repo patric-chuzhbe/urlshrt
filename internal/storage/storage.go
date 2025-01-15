@@ -6,13 +6,22 @@ import (
 )
 
 type Storage interface {
-	Insert(outerCtx context.Context, short, full string) error
+	Insert(
+		outerCtx context.Context,
+		short,
+		full string,
+		transaction *sql.Tx,
+	) error
 
 	Close() error
 
 	FindFullByShort(outerCtx context.Context, short string) (string, bool, error)
 
-	FindShortByFull(outerCtx context.Context, full string) (string, bool, error)
+	FindShortByFull(
+		outerCtx context.Context,
+		full string,
+		transaction *sql.Tx,
+	) (string, bool, error)
 
 	IsShortExists(outerCtx context.Context, short string) (bool, error)
 
@@ -31,4 +40,8 @@ type Storage interface {
 	) error
 
 	BeginTransaction() (*sql.Tx, error)
+
+	RollbackTransaction(transaction *sql.Tx) error
+
+	CommitTransaction(transaction *sql.Tx) error
 }

@@ -18,6 +18,14 @@ type CacheStruct struct {
 	FullToShort map[string]string
 }
 
+func (db *SimpleJSONDB) CommitTransaction(transaction *sql.Tx) error {
+	return nil
+}
+
+func (db *SimpleJSONDB) RollbackTransaction(transaction *sql.Tx) error {
+	return nil
+}
+
 func (db *SimpleJSONDB) BeginTransaction() (*sql.Tx, error) {
 	return nil, nil
 }
@@ -28,7 +36,7 @@ func (db *SimpleJSONDB) SaveNewFullsAndShorts(
 	transaction *sql.Tx,
 ) error {
 	for full, short := range unexistentFullsToShortsMap {
-		err := db.Insert(outerCtx, short, full)
+		err := db.Insert(outerCtx, short, full, transaction)
 		if err != nil {
 			return err
 		}
@@ -44,7 +52,7 @@ func (db *SimpleJSONDB) FindShortsByFulls(
 ) (map[string]string, error) {
 	result := map[string]string{}
 	for _, full := range originalUrls {
-		short, found, err := db.FindShortByFull(outerCtx, full)
+		short, found, err := db.FindShortByFull(outerCtx, full, transaction)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +143,12 @@ func (db *SimpleJSONDB) Ping(outerCtx context.Context) error {
 	return nil
 }
 
-func (db *SimpleJSONDB) Insert(outerCtx context.Context, short, full string) error {
+func (db *SimpleJSONDB) Insert(
+	outerCtx context.Context,
+	short string,
+	full string,
+	transaction *sql.Tx,
+) error {
 	db.Cache.ShortToFull[short] = full
 	db.Cache.FullToShort[full] = short
 
@@ -158,7 +171,11 @@ func (db *SimpleJSONDB) FindFullByShort(outerCtx context.Context, short string) 
 	return
 }
 
-func (db *SimpleJSONDB) FindShortByFull(outerCtx context.Context, full string) (short string, found bool, err error) {
+func (db *SimpleJSONDB) FindShortByFull(
+	outerCtx context.Context,
+	full string,
+	transaction *sql.Tx,
+) (short string, found bool, err error) {
 	short, found = db.Cache.FullToShort[full]
 	err = nil
 

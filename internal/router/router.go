@@ -25,6 +25,8 @@ type router struct {
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
 
+var ErrConflict = errors.New("data conflict")
+
 func fillThePostApishortenbatchResponse(
 	response *models.PostApishortenbatchResponse,
 	fullsToShortsMap map[string]string,
@@ -105,6 +107,10 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 
 	existentFullsToShortsMap, err := theRouter.theDB.FindShortsByFulls(context.Background(), originalUrls, transaction)
 	if err != nil {
+		err2 := theRouter.theDB.RollbackTransaction(transaction)
+		if err2 != nil {
+			logger.Log.Debugln("Error calling the `theRouter.theDB.RollbackTransaction()`: ", zap.Error(err2))
+		}
 		logger.Log.Debugln("Error calling the `theRouter.theDB.FindShortsByFulls()`: ", zap.Error(err))
 		response.WriteHeader(http.StatusInternalServerError)
 		return
@@ -120,6 +126,10 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 
 	err = theRouter.theDB.SaveNewFullsAndShorts(context.Background(), unexistentFullsToShortsMap, transaction)
 	if err != nil {
+		err2 := theRouter.theDB.RollbackTransaction(transaction)
+		if err2 != nil {
+			logger.Log.Debugln("Error calling the `theRouter.theDB.RollbackTransaction()`: ", zap.Error(err2))
+		}
 		logger.Log.Debugln("Error calling the `theRouter.theDB.SaveNewFullsAndShorts()`: ", zap.Error(err))
 		response.WriteHeader(http.StatusInternalServerError)
 		return
@@ -131,9 +141,9 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 		originalURLToCorrelationIDMap,
 	)
 
-	err = transaction.Commit()
+	err = theRouter.theDB.CommitTransaction(transaction)
 	if err != nil {
-		logger.Log.Debugln("Error calling the `transaction.Commit()`: ", zap.Error(err))
+		logger.Log.Debugln("Error calling the `theRouter.theDB.CommitTransaction()`: ", zap.Error(err))
 		response.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -184,7 +194,7 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 
 	urlToShort := requestDTO.URL
 	shortKey, err := theRouter.getShortKey(urlToShort)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrConflict) {
 		logger.Log.Debugln("error while `theRouter.getShortKey()` calling: ", zap.Error(err))
 		response.WriteHeader(http.StatusInternalServerError)
 		return
@@ -194,7 +204,12 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 	responseDTO := models.Response{Result: shortURL}
 
 	response.Header().Set("Content-Type", "application/json")
-	response.WriteHeader(http.StatusCreated)
+
+	resultStatus := http.StatusCreated
+	if errors.Is(err, ErrConflict) {
+		resultStatus = http.StatusConflict
+	}
+	response.WriteHeader(resultStatus)
 
 	if err := json.NewEncoder(response).Encode(responseDTO); err != nil {
 		logger.Log.Debug("error encoding response", zap.Error(err))
@@ -218,15 +233,35 @@ func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.
 }
 
 func (theRouter router) getShortKey(urlToShort string) (string, error) {
-	short, found, err := theRouter.theDB.FindShortByFull(context.Background(), urlToShort)
+	transaction, err := theRouter.theDB.BeginTransaction()
 	if err != nil {
 		return "", err
 	}
-	if found {
-		return short, nil
+
+	short, found, err := theRouter.theDB.FindShortByFull(context.Background(), urlToShort, transaction)
+	if err != nil {
+		_ = theRouter.theDB.RollbackTransaction(transaction)
+		return "", err
 	}
+
+	if found {
+		err = theRouter.theDB.CommitTransaction(transaction)
+		if err != nil {
+			return short, err
+		}
+
+		return short, ErrConflict
+	}
+
 	short = uuid.New().String()
-	err = theRouter.theDB.Insert(context.Background(), short, urlToShort)
+	err = theRouter.theDB.Insert(context.Background(), short, urlToShort, transaction)
+	if err != nil {
+		_ = theRouter.theDB.RollbackTransaction(transaction)
+
+		return "", err
+	}
+
+	err = theRouter.theDB.CommitTransaction(transaction)
 	if err != nil {
 		return "", err
 	}
@@ -267,13 +302,17 @@ func (theRouter router) PostShorten(res http.ResponseWriter, req *http.Request) 
 	}
 
 	shortKey, err := theRouter.getShortKey(urlToShort)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrConflict) {
 		logger.Log.Debugln("error while `theRouter.getShortKey()` calling: ", zap.Error(err))
 		http.Error(res, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	res.WriteHeader(http.StatusCreated)
+	resultStatus := http.StatusCreated
+	if errors.Is(err, ErrConflict) {
+		resultStatus = http.StatusConflict
+	}
+	res.WriteHeader(resultStatus)
 
 	_, err = res.Write([]byte(getShortURL(shortKey)))
 	if err != nil {

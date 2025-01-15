@@ -11,10 +11,10 @@ func Test(t *testing.T) {
 		theStorage, err := New()
 		assert.NoError(t, err, "The memorystorage.New() should not return error")
 
-		err = theStorage.Insert(context.Background(), "some short", "some full")
+		err = theStorage.Insert(context.Background(), "some short", "some full", nil)
 		assert.NoError(t, err, "The `theStorage.Insert()` should not return error")
 
-		short, found, err := theStorage.FindShortByFull(context.Background(), "some full")
+		short, found, err := theStorage.FindShortByFull(context.Background(), "some full", nil)
 		assert.NoError(t, err, "The `theStorage.Insert()` should not return error")
 		assert.True(t, found)
 		assert.Equal(t, "some short", short, "Should be equal to `some short`")
