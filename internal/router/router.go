@@ -7,11 +7,10 @@ import (
 	chi "github.com/go-chi/chi/v5"
 	validator "github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
-	config "github.com/patric-chuzhbe/urlshrt/internal/config"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	gzippedHttp "github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
 	logger "github.com/patric-chuzhbe/urlshrt/internal/logger"
 	models "github.com/patric-chuzhbe/urlshrt/internal/models"
-	"github.com/patric-chuzhbe/urlshrt/internal/storage"
 	"github.com/thoas/go-funk"
 	"go.uber.org/zap"
 	"io"
@@ -20,24 +19,25 @@ import (
 )
 
 type router struct {
-	theDB storage.Storage
+	theDB        storage.Storage
+	shortURLBase string
 }
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
 
 var ErrConflict = errors.New("data conflict")
 
-func fillThePostApishortenbatchResponse(
-	response *models.PostApishortenbatchResponse,
+func (theRouter router) fillThePostApishortenbatchResponse(
+	response *models.BatchShortenResponse,
 	fullsToShortsMap map[string]string,
 	originalURLToCorrelationIDMap map[string]string,
 ) {
 	for full, short := range fullsToShortsMap {
 		*response = append(
 			*response,
-			models.ShortURLToCorrelationID{
+			models.BatchShortenResponseItem{
 				CorrelationID: originalURLToCorrelationIDMap[full],
-				ShortURL:      getShortURL(short),
+				ShortURL:      theRouter.getShortURL(short),
 			},
 		)
 	}
@@ -47,10 +47,10 @@ func (theRouter router) getPostApishortenbatchResponse(
 	existentFullsToShortsMap map[string]string,
 	unexistentFullsToShortsMap map[string]string,
 	originalURLToCorrelationIDMap map[string]string,
-) models.PostApishortenbatchResponse {
-	result := models.PostApishortenbatchResponse{}
-	fillThePostApishortenbatchResponse(&result, existentFullsToShortsMap, originalURLToCorrelationIDMap)
-	fillThePostApishortenbatchResponse(&result, unexistentFullsToShortsMap, originalURLToCorrelationIDMap)
+) models.BatchShortenResponse {
+	result := models.BatchShortenResponse{}
+	theRouter.fillThePostApishortenbatchResponse(&result, existentFullsToShortsMap, originalURLToCorrelationIDMap)
+	theRouter.fillThePostApishortenbatchResponse(&result, unexistentFullsToShortsMap, originalURLToCorrelationIDMap)
 
 	return result
 }
@@ -64,7 +64,7 @@ func (theRouter router) getUnexistentFullsToShortsMap(unexistentFulls []string) 
 	return result
 }
 
-func (theRouter router) getOriginalURLToCorrelationIDMap(requestDTO models.PostApishortenbatchRequest) map[string]string {
+func (theRouter router) getOriginalURLToCorrelationIDMap(requestDTO models.BatchShortenRequest) map[string]string {
 	result := map[string]string{}
 	for _, originalURLToCorrelationID := range requestDTO {
 		result[originalURLToCorrelationID.OriginalURL] = originalURLToCorrelationID.CorrelationID
@@ -80,7 +80,7 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 		return
 	}
 
-	var requestDTO models.PostApishortenbatchRequest
+	var requestDTO models.BatchShortenRequest
 	if err := json.NewDecoder(request.Body).Decode(&requestDTO); err != nil {
 		logger.Log.Debugln("cannot decode request JSON body", zap.Error(err))
 		response.WriteHeader(http.StatusInternalServerError)
@@ -157,8 +157,8 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 	}
 }
 
-func getShortURL(shortKey string) string {
-	return config.Values.ShortURLBase + "/" + shortKey
+func (theRouter router) getShortURL(shortKey string) string {
+	return theRouter.shortURLBase + "/" + shortKey
 }
 
 func (theRouter router) GetPing(response http.ResponseWriter, request *http.Request) {
@@ -178,7 +178,7 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 		return
 	}
 
-	var requestDTO models.Request
+	var requestDTO models.ShortenRequest
 	if err := json.NewDecoder(request.Body).Decode(&requestDTO); err != nil {
 		logger.Log.Debugln("cannot decode request JSON body", zap.Error(err))
 		response.WriteHeader(http.StatusInternalServerError)
@@ -199,9 +199,9 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 		response.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	shortURL := getShortURL(shortKey)
+	shortURL := theRouter.getShortURL(shortKey)
 
-	responseDTO := models.Response{Result: shortURL}
+	responseDTO := models.ShortenResponse{Result: shortURL}
 
 	response.Header().Set("Content-Type", "application/json")
 
@@ -254,7 +254,7 @@ func (theRouter router) getShortKey(urlToShort string) (string, error) {
 	}
 
 	short = uuid.New().String()
-	err = theRouter.theDB.Insert(context.Background(), short, urlToShort, transaction)
+	err = theRouter.theDB.InsertURLMapping(context.Background(), short, urlToShort, transaction)
 	if err != nil {
 		_ = theRouter.theDB.RollbackTransaction(transaction)
 
@@ -314,16 +314,17 @@ func (theRouter router) PostShorten(res http.ResponseWriter, req *http.Request) 
 	}
 	res.WriteHeader(resultStatus)
 
-	_, err = res.Write([]byte(getShortURL(shortKey)))
+	_, err = res.Write([]byte(theRouter.getShortURL(shortKey)))
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
 	}
 }
 
-func New(database storage.Storage) *chi.Mux {
+func New(database storage.Storage, shortURLBase string) *chi.Mux {
 	myRouter := router{
-		theDB: database,
+		theDB:        database,
+		shortURLBase: shortURLBase,
 	}
 	router := chi.NewRouter()
 	router.Use(

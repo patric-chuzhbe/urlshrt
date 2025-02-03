@@ -12,14 +12,8 @@ import (
 )
 
 type PostgresDB struct {
-	database *sql.DB
-	config   Config
-}
-
-type Config struct {
-	FileStoragePath   string
-	DatabaseDSN       string
-	ConnectionTimeout time.Duration
+	database          *sql.DB
+	connectionTimeout time.Duration
 }
 
 const (
@@ -35,33 +29,39 @@ type executor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 }
 
-func (pgdb *PostgresDB) CommitTransaction(transaction *sql.Tx) error {
+func (db *PostgresDB) CommitTransaction(transaction *sql.Tx) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic occurred while committing transaction: %v", r)
+		}
+	}()
+
 	return transaction.Commit()
 }
 
-func (pgdb *PostgresDB) RollbackTransaction(transaction *sql.Tx) error {
+func (db *PostgresDB) RollbackTransaction(transaction *sql.Tx) error {
 	return transaction.Rollback()
 }
 
-func (pgdb *PostgresDB) BeginTransaction() (*sql.Tx, error) {
-	return pgdb.database.Begin()
+func (db *PostgresDB) BeginTransaction() (*sql.Tx, error) {
+	return db.database.Begin()
 }
 
-func getShortToFullURLMapTableValues(unexistentFullsToShortsMap map[string]string) [][]string {
+func prepareURLMapping(newURLs map[string]string) [][]string {
 	result := [][]string{}
-	for full, short := range unexistentFullsToShortsMap {
+	for full, short := range newURLs {
 		result = append(result, []string{short, full})
 	}
 
 	return result
 }
 
-func (pgdb *PostgresDB) SaveNewFullsAndShorts(
-	outerCtx context.Context,
-	unexistentFullsToShortsMap map[string]string,
+func (db *PostgresDB) SaveNewFullsAndShorts(
+	ctx context.Context,
+	newURLs map[string]string,
 	transaction *sql.Tx,
 ) error {
-	shortToFullURLMapTableValues := getShortToFullURLMapTableValues(unexistentFullsToShortsMap)
+	shortToFullURLMapTableValues := prepareURLMapping(newURLs)
 	shortToFullURLMapTableValuesLen := len(shortToFullURLMapTableValues)
 	if shortToFullURLMapTableValuesLen == 0 {
 		return nil
@@ -75,13 +75,13 @@ func (pgdb *PostgresDB) SaveNewFullsAndShorts(
 
 	var database executor
 	if transaction == nil {
-		database = pgdb.database
+		database = db.database
 	} else {
 		database = transaction
 	}
 
 	_, err := database.ExecContext(
-		outerCtx,
+		ctx,
 		fmt.Sprintf(
 			`INSERT INTO "%s" ("short", "full") VALUES %s`,
 			ShortToFullURLMapTableName,
@@ -103,17 +103,17 @@ func (pgdb *PostgresDB) SaveNewFullsAndShorts(
 	return nil
 }
 
-func (pgdb *PostgresDB) FindShortsByFulls(
-	outerCtx context.Context,
-	originalUrls []string,
+func (db *PostgresDB) FindShortsByFulls(
+	ctx context.Context,
+	urls []string,
 	transaction *sql.Tx,
 ) (map[string]string, error) {
-	originalUrlsLen := len(originalUrls)
+	originalUrlsLen := len(urls)
 	if originalUrlsLen == 0 {
 		return map[string]string{}, nil
 	}
 	originalUrlsPlaceholdersSlice := make([]string, originalUrlsLen)
-	for i := range originalUrls {
+	for i := range urls {
 		originalUrlsPlaceholdersSlice[i] = fmt.Sprintf("$%d", i+1)
 	}
 	originalUrlsPlaceholders := strings.Join(originalUrlsPlaceholdersSlice, ",")
@@ -121,13 +121,13 @@ func (pgdb *PostgresDB) FindShortsByFulls(
 	var database queryer
 
 	if transaction == nil {
-		database = pgdb.database
+		database = db.database
 	} else {
 		database = transaction
 	}
 
 	rows, err := database.QueryContext(
-		outerCtx,
+		ctx,
 		fmt.Sprintf(
 			`SELECT "short", "full" FROM "%s" WHERE "full" IN (%s)`,
 			ShortToFullURLMapTableName,
@@ -140,7 +140,7 @@ func (pgdb *PostgresDB) FindShortsByFulls(
 			}
 
 			return result
-		}(originalUrls)...,
+		}(urls)...,
 	)
 	if err != nil {
 		return nil, err
@@ -166,8 +166,8 @@ func (pgdb *PostgresDB) FindShortsByFulls(
 	return result, nil
 }
 
-func (pgdb *PostgresDB) Insert(
-	outerCtx context.Context,
+func (db *PostgresDB) InsertURLMapping(
+	ctx context.Context,
 	short,
 	full string,
 	transaction *sql.Tx,
@@ -175,13 +175,13 @@ func (pgdb *PostgresDB) Insert(
 	var database executor
 
 	if transaction == nil {
-		database = pgdb.database
+		database = db.database
 	} else {
 		database = transaction
 	}
 
 	_, err := database.ExecContext(
-		outerCtx,
+		ctx,
 		fmt.Sprintf(
 			`INSERT INTO "%s" ("short", "full") VALUES ($1, $2)`,
 			ShortToFullURLMapTableName,
@@ -196,9 +196,9 @@ func (pgdb *PostgresDB) Insert(
 	return nil
 }
 
-func (pgdb *PostgresDB) FindFullByShort(outerCtx context.Context, short string) (string, bool, error) {
-	row := pgdb.database.QueryRowContext(
-		outerCtx,
+func (db *PostgresDB) FindFullByShort(ctx context.Context, short string) (string, bool, error) {
+	row := db.database.QueryRowContext(
+		ctx,
 		fmt.Sprintf(
 			`SELECT "full" FROM "%s" WHERE "short" = $1`,
 			ShortToFullURLMapTableName,
@@ -217,21 +217,21 @@ func (pgdb *PostgresDB) FindFullByShort(outerCtx context.Context, short string) 
 	return full, true, nil
 }
 
-func (pgdb *PostgresDB) FindShortByFull(
-	outerCtx context.Context,
+func (db *PostgresDB) FindShortByFull(
+	ctx context.Context,
 	full string,
 	transaction *sql.Tx,
 ) (string, bool, error) {
 	var database queryer
 
 	if transaction == nil {
-		database = pgdb.database
+		database = db.database
 	} else {
 		database = transaction
 	}
 
 	row := database.QueryRowContext(
-		outerCtx,
+		ctx,
 		fmt.Sprintf(
 			`SELECT "short" FROM "%s" WHERE "full" = $1`,
 			ShortToFullURLMapTableName,
@@ -250,9 +250,9 @@ func (pgdb *PostgresDB) FindShortByFull(
 	return short, true, nil
 }
 
-func (pgdb *PostgresDB) IsShortExists(outerCtx context.Context, short string) (bool, error) {
-	row := pgdb.database.QueryRowContext(
-		outerCtx,
+func (db *PostgresDB) IsShortExists(ctx context.Context, short string) (bool, error) {
+	row := db.database.QueryRowContext(
+		ctx,
 		fmt.Sprintf(
 			`SELECT COUNT(*) FROM "%s" WHERE "short" = $1`,
 			ShortToFullURLMapTableName,
@@ -272,9 +272,9 @@ func (pgdb *PostgresDB) IsShortExists(outerCtx context.Context, short string) (b
 	return shortCount > 0, nil
 }
 
-func (pgdb *PostgresDB) createDBStructure(outerCtx context.Context) error {
-	_, err := pgdb.database.ExecContext(
-		outerCtx,
+func (db *PostgresDB) createDBStructure(ctx context.Context) error {
+	_, err := db.database.ExecContext(
+		ctx,
 		fmt.Sprintf(
 			`
 				CREATE TABLE "%s" (
@@ -294,9 +294,9 @@ func (pgdb *PostgresDB) createDBStructure(outerCtx context.Context) error {
 	return nil
 }
 
-func (pgdb *PostgresDB) checkDBStructure(outerCtx context.Context) (bool, error) {
-	row := pgdb.database.QueryRowContext(
-		outerCtx,
+func (db *PostgresDB) checkDBStructure(ctx context.Context) (bool, error) {
+	row := db.database.QueryRowContext(
+		ctx,
 		`
 			SELECT COUNT(*)
 				FROM pg_tables 
@@ -304,22 +304,22 @@ func (pgdb *PostgresDB) checkDBStructure(outerCtx context.Context) (bool, error)
 		`,
 		ShortToFullURLMapTableName,
 	)
-	var amountOfExistentTables int
-	err := row.Scan(&amountOfExistentTables)
+	var tableCount int
+	err := row.Scan(&tableCount)
 	if err != nil {
 		return false, err
 	}
 
-	return amountOfExistentTables > 0, nil
+	return tableCount > 0, nil
 }
 
-func (pgdb *PostgresDB) checkOrCreateDBStructure(outerCtx context.Context) error {
-	isDBStructureOk, err := pgdb.checkDBStructure(outerCtx)
+func (db *PostgresDB) checkOrCreateDBStructure(ctx context.Context) error {
+	isDBStructureOk, err := db.checkDBStructure(ctx)
 	if err != nil {
 		return err
 	}
 	if !isDBStructureOk {
-		err := pgdb.createDBStructure(outerCtx)
+		err := db.createDBStructure(ctx)
 		if err != nil {
 			return err
 		}
@@ -328,18 +328,22 @@ func (pgdb *PostgresDB) checkOrCreateDBStructure(outerCtx context.Context) error
 	return nil
 }
 
-func New(outerCtx context.Context, config Config) (*PostgresDB, error) {
-	database, err := sql.Open("pgx", config.DatabaseDSN)
+func New(
+	ctx context.Context,
+	databaseDSN string,
+	connectionTimeout time.Duration,
+) (*PostgresDB, error) {
+	database, err := sql.Open("pgx", databaseDSN)
 	if err != nil {
 		return nil, err
 	}
 
 	result := &PostgresDB{
-		database: database,
-		config:   config,
+		database:          database,
+		connectionTimeout: connectionTimeout,
 	}
 
-	err = result.checkOrCreateDBStructure(outerCtx)
+	err = result.checkOrCreateDBStructure(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -347,15 +351,15 @@ func New(outerCtx context.Context, config Config) (*PostgresDB, error) {
 	return result, nil
 }
 
-func (pgdb *PostgresDB) Ping(outerCtx context.Context) error {
-	ctxWithTimeout, cancel := context.WithTimeout(outerCtx, pgdb.config.ConnectionTimeout*time.Second)
+func (db *PostgresDB) Ping(ctx context.Context) error {
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, db.connectionTimeout*time.Second)
 	defer cancel()
 
-	return pgdb.database.PingContext(ctxWithTimeout)
+	return db.database.PingContext(ctxWithTimeout)
 }
 
-func (pgdb *PostgresDB) Close() error {
-	err := pgdb.database.Close()
+func (db *PostgresDB) Close() error {
+	err := db.database.Close()
 	if err != nil {
 		return err
 	}

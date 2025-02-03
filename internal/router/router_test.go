@@ -7,12 +7,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	resty "github.com/go-resty/resty/v2"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
 	"github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
-	"github.com/patric-chuzhbe/urlshrt/internal/simplejsondb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -26,24 +27,24 @@ const (
 	testDBFileName = "db_test.json"
 )
 
-func gzipString(input string) []byte {
+func gzipString(input string) ([]byte, error) {
 	var buf bytes.Buffer
 	gzipWriter := gzip.NewWriter(&buf)
 
 	_, err := gzipWriter.Write([]byte(input))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	if err := gzipWriter.Close(); err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	return buf.Bytes()
+	return buf.Bytes(), nil
 }
 
 func TestPostApishortenForGzip(t *testing.T) {
-	err := config.Init(config.WithDisableFlagsParsing(true))
+	cfg, err := config.New(config.WithDisableFlagsParsing(true))
 	require.NoError(t, err)
 
 	type tRequest struct {
@@ -62,12 +63,16 @@ func TestPostApishortenForGzip(t *testing.T) {
 	positiveRequestBody := `{
 		"url": "https://ru.wikipedia.org/wiki/%D0%9F%D1%83%D1%88%D0%BA%D0%B0"
 	}`
+	firstTestCaseBody, err := gzipString(positiveRequestBody)
+	if err != nil {
+		log.Fatal(err)
+	}
 	testCases := []tTestCase{
 		{
 			name: "positive",
 			request: tRequest{
 				http.MethodPost,
-				gzipString(positiveRequestBody),
+				firstTestCaseBody,
 			},
 			expectedResponse: tExpectedResponse{
 				http.StatusCreated,
@@ -77,7 +82,7 @@ func TestPostApishortenForGzip(t *testing.T) {
 	}
 
 	// The DB
-	theDB, err := simplejsondb.New(testDBFileName)
+	theDB, err := jsondb.New(testDBFileName)
 	require.NoError(t, err)
 	require.NotNil(t, theDB)
 	defer func() {
@@ -88,7 +93,8 @@ func TestPostApishortenForGzip(t *testing.T) {
 	}()
 
 	myRouter := router{
-		theDB: theDB,
+		theDB:        theDB,
+		shortURLBase: cfg.ShortURLBase,
 	}
 
 	router := chi.NewRouter()
@@ -137,7 +143,7 @@ func TestPostApishortenForGzip(t *testing.T) {
 }
 
 func TestPostApishorten(t *testing.T) {
-	err := config.Init(config.WithDisableFlagsParsing(true))
+	cfg, err := config.New(config.WithDisableFlagsParsing(true))
 	require.NoError(t, err)
 
 	type tRequest struct {
@@ -215,7 +221,7 @@ func TestPostApishorten(t *testing.T) {
 	}
 
 	// The DB
-	theDB, err := simplejsondb.New(testDBFileName)
+	theDB, err := jsondb.New(testDBFileName)
 	require.NoError(t, err)
 	require.NotNil(t, theDB)
 	defer func() {
@@ -226,7 +232,8 @@ func TestPostApishorten(t *testing.T) {
 	}()
 
 	myRouter := router{
-		theDB: theDB,
+		theDB:        theDB,
+		shortURLBase: cfg.ShortURLBase,
 	}
 
 	handler := http.HandlerFunc(myRouter.PostApishorten)
@@ -360,7 +367,7 @@ eshche odna stroka
 		},
 	}
 
-	err := config.Init()
+	cfg, err := config.New()
 	require.NoError(t, err)
 
 	for _, tt := range tests {
@@ -368,7 +375,7 @@ eshche odna stroka
 			var err error
 
 			// The DB
-			theDB, err := simplejsondb.New(testDBFileName)
+			theDB, err := jsondb.New(testDBFileName)
 			require.NoError(t, err)
 			require.NotNil(t, theDB)
 			defer func() {
@@ -379,7 +386,8 @@ eshche odna stroka
 			}()
 
 			myRouter := router{
-				theDB: theDB,
+				theDB:        theDB,
+				shortURLBase: cfg.ShortURLBase,
 			}
 
 			var shortURL []byte

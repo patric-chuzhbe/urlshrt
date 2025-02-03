@@ -6,8 +6,8 @@ import (
 )
 
 type Storage interface {
-	Insert(
-		outerCtx context.Context,
+	InsertURLMapping(
+		ctx context.Context,
 		short,
 		full string,
 		transaction *sql.Tx,
@@ -15,26 +15,26 @@ type Storage interface {
 
 	Close() error
 
-	FindFullByShort(outerCtx context.Context, short string) (string, bool, error)
+	FindFullByShort(ctx context.Context, short string) (string, bool, error)
 
 	FindShortByFull(
-		outerCtx context.Context,
+		ctx context.Context,
 		full string,
 		transaction *sql.Tx,
 	) (string, bool, error)
 
-	IsShortExists(outerCtx context.Context, short string) (bool, error)
+	IsShortExists(ctx context.Context, short string) (bool, error)
 
-	Ping(outerCtx context.Context) error
+	Ping(ctx context.Context) error
 
 	FindShortsByFulls(
-		outerCtx context.Context,
+		ctx context.Context,
 		originalUrls []string,
 		transaction *sql.Tx,
 	) (map[string]string, error)
 
 	SaveNewFullsAndShorts(
-		outerCtx context.Context,
+		ctx context.Context,
 		unexistentFullsToShortsMap map[string]string,
 		transaction *sql.Tx,
 	) error

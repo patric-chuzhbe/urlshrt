@@ -2,116 +2,113 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/memorystorage"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/postgresdb"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
-	"github.com/patric-chuzhbe/urlshrt/internal/memorystorage"
-	"github.com/patric-chuzhbe/urlshrt/internal/postgresdb"
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/router"
-	"github.com/patric-chuzhbe/urlshrt/internal/simplejsondb"
-	"github.com/patric-chuzhbe/urlshrt/internal/storage"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 )
 
-var theDB storage.Storage
-
-const (
-	StorageTypePostgresql = iota
-	StorageTypeFile
-	StorageTypeMemory
-)
-
-func getTheMostWantedOfAvailableStorageType() int {
-	if config.Values.DatabaseDSN != "" {
-		return StorageTypePostgresql
+func getAvailableStorageType(cfg *config.Config) int {
+	if cfg.DatabaseDSN != "" {
+		return models.StorageTypePostgresql
 	}
 
-	if config.Values.DBFileName != "" {
-		return StorageTypeFile
+	if cfg.DBFileName != "" {
+		return models.StorageTypeFile
 	}
 
-	return StorageTypeMemory
+	return models.StorageTypeMemory
 }
 
-func getTheMostWantedOfAvailableStorage() (storage.Storage, error) {
-	switch getTheMostWantedOfAvailableStorageType() {
-	case StorageTypePostgresql:
+func getStorageByType(cfg *config.Config) (storage.Storage, error) {
+	switch getAvailableStorageType(cfg) {
+	case models.StorageTypeUnknown:
+		return nil, errors.New("unknown storage type")
+
+	case models.StorageTypePostgresql:
 		return postgresdb.New(
 			context.Background(),
-			postgresdb.Config{
-				FileStoragePath:   config.Values.DBFileName,
-				DatabaseDSN:       config.Values.DatabaseDSN,
-				ConnectionTimeout: config.Values.DBConnectionTimeout,
-			},
+			cfg.DatabaseDSN,
+			cfg.DBConnectionTimeout,
 		)
-	case StorageTypeFile:
-		return simplejsondb.New(config.Values.DBFileName)
+
+	case models.StorageTypeFile:
+		return jsondb.New(cfg.DBFileName)
 	}
 
-	//case StorageTypeMemory:
 	return memorystorage.New()
 }
 
 func main() {
+	var db storage.Storage
+
 	var err error
 
-	err = config.Init()
+	cfg, err := config.New()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
-	err = logger.Init(config.Values.LogLevel)
+	err = logger.Init(cfg.LogLevel)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	defer func() {
 		err := logger.Sync()
 		if err != nil {
-			panic(err)
+			fmt.Println("Logger sync error:", err)
 		}
 	}()
 
-	theDB, err = getTheMostWantedOfAvailableStorage()
+	db, err = getStorageByType(cfg)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	defer func() {
 		if p := recover(); p != nil {
-			err := theDB.Close()
+			err := db.Close()
 			if err != nil {
 				fmt.Println("Error closing database:", err)
 			}
 		}
 	}()
 
-	httpHandler := router.New(theDB)
+	httpHandler := router.New(db, cfg.ShortURLBase)
 
 	// Handle SIGINT signal (Ctrl+C)
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	//signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigCh
-		logger.Log.Infoln(
-			"Received interrupt signal, saving database and exiting...",
-		)
-		err := theDB.Close()
-		if err != nil {
-			panic(err)
-		}
-		os.Exit(0)
-	}()
+	termCh := make(chan os.Signal, 1)
+	signal.Notify(termCh, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	logger.Log.Infoln(
 		"server running",
-		"RunAddr", config.Values.RunAddr,
+		"RunAddr", cfg.RunAddr,
 	)
-	err = http.ListenAndServe(config.Values.RunAddr, httpHandler)
-	if err != nil {
-		panic(err)
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- http.ListenAndServe(cfg.RunAddr, httpHandler)
+	}()
+
+	select {
+	case sig := <-termCh:
+		logger.Log.Infoln("Received signal:", sig, "Saving database and exiting...")
+		err := db.Close()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+	case err := <-serverErrCh:
+		logger.Log.Fatal("Server error:", err)
 	}
 }

@@ -2,17 +2,17 @@ package memorystorage
 
 import (
 	"context"
-	"github.com/patric-chuzhbe/urlshrt/internal/simplejsondb"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
 )
 
 type MemoryStorage struct {
-	*simplejsondb.SimpleJSONDB
+	*jsondb.JSONDB
 }
 
 func New() (*MemoryStorage, error) {
 	return &MemoryStorage{
-		SimpleJSONDB: &simplejsondb.SimpleJSONDB{
-			Cache: simplejsondb.CacheStruct{
+		JSONDB: &jsondb.JSONDB{
+			Cache: jsondb.CacheStruct{
 				ShortToFull: map[string]string{},
 				FullToShort: map[string]string{},
 			},
@@ -24,6 +24,6 @@ func (theStorage *MemoryStorage) Close() error {
 	return nil
 }
 
-func (theStorage *MemoryStorage) Ping(outerCtx context.Context) error {
+func (theStorage *MemoryStorage) Ping(ctx context.Context) error {
 	return nil
 }

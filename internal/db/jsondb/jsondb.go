@@ -1,4 +1,4 @@
-package simplejsondb
+package jsondb
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"os"
 )
 
-type SimpleJSONDB struct {
+type JSONDB struct {
 	fileName string
 	Cache    CacheStruct
 }
@@ -18,25 +18,25 @@ type CacheStruct struct {
 	FullToShort map[string]string
 }
 
-func (db *SimpleJSONDB) CommitTransaction(transaction *sql.Tx) error {
+func (db *JSONDB) CommitTransaction(transaction *sql.Tx) error {
 	return nil
 }
 
-func (db *SimpleJSONDB) RollbackTransaction(transaction *sql.Tx) error {
+func (db *JSONDB) RollbackTransaction(transaction *sql.Tx) error {
 	return nil
 }
 
-func (db *SimpleJSONDB) BeginTransaction() (*sql.Tx, error) {
+func (db *JSONDB) BeginTransaction() (*sql.Tx, error) {
 	return nil, nil
 }
 
-func (db *SimpleJSONDB) SaveNewFullsAndShorts(
-	outerCtx context.Context,
+func (db *JSONDB) SaveNewFullsAndShorts(
+	ctx context.Context,
 	unexistentFullsToShortsMap map[string]string,
 	transaction *sql.Tx,
 ) error {
 	for full, short := range unexistentFullsToShortsMap {
-		err := db.Insert(outerCtx, short, full, transaction)
+		err := db.InsertURLMapping(ctx, short, full, transaction)
 		if err != nil {
 			return err
 		}
@@ -45,14 +45,14 @@ func (db *SimpleJSONDB) SaveNewFullsAndShorts(
 	return nil
 }
 
-func (db *SimpleJSONDB) FindShortsByFulls(
-	outerCtx context.Context,
+func (db *JSONDB) FindShortsByFulls(
+	ctx context.Context,
 	originalUrls []string,
 	transaction *sql.Tx,
 ) (map[string]string, error) {
 	result := map[string]string{}
 	for _, full := range originalUrls {
-		short, found, err := db.FindShortByFull(outerCtx, full, transaction)
+		short, found, err := db.FindShortByFull(ctx, full, transaction)
 		if err != nil {
 			return nil, err
 		}
@@ -115,8 +115,8 @@ func parseJSONFile(fileName string, cacheMap *CacheStruct) error {
 	return nil
 }
 
-func New(fileName string) (*SimpleJSONDB, error) {
-	simpleJSONDB := SimpleJSONDB{
+func New(fileName string) (*JSONDB, error) {
+	simpleJSONDB := JSONDB{
 		fileName: fileName,
 		Cache:    CacheStruct{},
 	}
@@ -139,12 +139,12 @@ func New(fileName string) (*SimpleJSONDB, error) {
 	return &simpleJSONDB, nil
 }
 
-func (db *SimpleJSONDB) Ping(outerCtx context.Context) error {
+func (db *JSONDB) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (db *SimpleJSONDB) Insert(
-	outerCtx context.Context,
+func (db *JSONDB) InsertURLMapping(
+	ctx context.Context,
 	short string,
 	full string,
 	transaction *sql.Tx,
@@ -155,7 +155,7 @@ func (db *SimpleJSONDB) Insert(
 	return nil
 }
 
-func (db *SimpleJSONDB) Close() error {
+func (db *JSONDB) Close() error {
 	err := writeToJSONFile(db.fileName, db.Cache)
 	if err != nil {
 		return err
@@ -164,15 +164,15 @@ func (db *SimpleJSONDB) Close() error {
 	return nil
 }
 
-func (db *SimpleJSONDB) FindFullByShort(outerCtx context.Context, short string) (full string, found bool, err error) {
+func (db *JSONDB) FindFullByShort(ctx context.Context, short string) (full string, found bool, err error) {
 	full, found = db.Cache.ShortToFull[short]
 	err = nil
 
 	return
 }
 
-func (db *SimpleJSONDB) FindShortByFull(
-	outerCtx context.Context,
+func (db *JSONDB) FindShortByFull(
+	ctx context.Context,
 	full string,
 	transaction *sql.Tx,
 ) (short string, found bool, err error) {
@@ -182,7 +182,7 @@ func (db *SimpleJSONDB) FindShortByFull(
 	return
 }
 
-func (db *SimpleJSONDB) IsShortExists(outerCtx context.Context, short string) (bool, error) {
+func (db *JSONDB) IsShortExists(ctx context.Context, short string) (bool, error) {
 	_, exists := db.Cache.ShortToFull[short]
 
 	return exists, nil

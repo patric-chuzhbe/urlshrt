@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-type config struct {
+type Config struct {
 	RunAddr             string        `env:"SERVER_ADDRESS" validate:"hostname_port"`
 	ShortURLBase        string        `env:"BASE_URL" validate:"url"`
 	LogLevel            string        `env:"LOG_LEVEL" validate:"loglevel"`
@@ -18,8 +18,6 @@ type config struct {
 	DatabaseDSN         string        `env:"DATABASE_DSN"`
 	DBConnectionTimeout time.Duration `env:"DB_CONNECTION_TIMEOUT"`
 }
-
-var Values config
 
 func validateFilePath(fieldLevel validator.FieldLevel) bool {
 	path := fieldLevel.Field().String()
@@ -42,7 +40,7 @@ func validateLogLevel(fieldLevel validator.FieldLevel) bool {
 	return allowedLogLevels[value]
 }
 
-func validate() error {
+func (conf *Config) Validate() error {
 	validate := validator.New()
 
 	err := validate.RegisterValidation("loglevel", validateLogLevel)
@@ -55,7 +53,7 @@ func validate() error {
 		return err
 	}
 
-	return validate.Struct(Values)
+	return validate.Struct(conf)
 }
 
 type InitOption func(*initOptions)
@@ -70,7 +68,7 @@ func WithDisableFlagsParsing(disableFlagsParsing bool) InitOption {
 	}
 }
 
-func Init(optionsProto ...InitOption) error {
+func New(optionsProto ...InitOption) (*Config, error) {
 	options := &initOptions{
 		disableFlagsParsing: false,
 	}
@@ -83,7 +81,7 @@ func Init(optionsProto ...InitOption) error {
 		log.Printf("Unable to load .env file: %v", err)
 	}
 
-	Values = config{
+	values := Config{
 		RunAddr:             ":8080",
 		ShortURLBase:        "http://localhost:8080",
 		LogLevel:            "info",
@@ -92,43 +90,43 @@ func Init(optionsProto ...InitOption) error {
 		DBConnectionTimeout: 10,
 	}
 	if !options.disableFlagsParsing {
-		flag.StringVar(&Values.RunAddr, "a", Values.RunAddr, "address and port to run server")
-		flag.StringVar(&Values.ShortURLBase, "b", Values.ShortURLBase, "base address of the resulting shortened URL")
-		flag.StringVar(&Values.LogLevel, "l", Values.LogLevel, "logger level")
-		flag.StringVar(&Values.DBFileName, "f", Values.DBFileName, "JSON file name with database")
-		flag.StringVar(&Values.DatabaseDSN, "d", Values.DatabaseDSN, "A string with the database connection details")
+		flag.StringVar(&values.RunAddr, "a", values.RunAddr, "address and port to run server")
+		flag.StringVar(&values.ShortURLBase, "b", values.ShortURLBase, "base address of the resulting shortened URL")
+		flag.StringVar(&values.LogLevel, "l", values.LogLevel, "logger level")
+		flag.StringVar(&values.DBFileName, "f", values.DBFileName, "JSON file name with database")
+		flag.StringVar(&values.DatabaseDSN, "d", values.DatabaseDSN, "A string with the database connection details")
 		flag.Parse()
 	}
 
-	var valuesFromEnv config
+	var valuesFromEnv Config
 	err = env.Parse(&valuesFromEnv)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if valuesFromEnv.RunAddr != "" {
-		Values.RunAddr = valuesFromEnv.RunAddr
+		values.RunAddr = valuesFromEnv.RunAddr
 	}
 
 	if valuesFromEnv.ShortURLBase != "" {
-		Values.ShortURLBase = valuesFromEnv.ShortURLBase
+		values.ShortURLBase = valuesFromEnv.ShortURLBase
 	}
 
 	if valuesFromEnv.LogLevel != "" {
-		Values.LogLevel = valuesFromEnv.LogLevel
+		values.LogLevel = valuesFromEnv.LogLevel
 	}
 
 	if valuesFromEnv.DBFileName != "" {
-		Values.DBFileName = valuesFromEnv.DBFileName
+		values.DBFileName = valuesFromEnv.DBFileName
 	}
 
 	if valuesFromEnv.DatabaseDSN != "" {
-		Values.DatabaseDSN = valuesFromEnv.DatabaseDSN
+		values.DatabaseDSN = valuesFromEnv.DatabaseDSN
 	}
 
 	if valuesFromEnv.DBConnectionTimeout != 0 {
-		Values.DBConnectionTimeout = valuesFromEnv.DBConnectionTimeout
+		values.DBConnectionTimeout = valuesFromEnv.DBConnectionTimeout
 	}
 
-	return validate()
+	return &values, values.Validate()
 }
