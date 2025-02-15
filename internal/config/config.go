@@ -11,12 +11,14 @@ import (
 )
 
 type Config struct {
-	RunAddr             string        `env:"SERVER_ADDRESS" validate:"hostname_port"`
-	ShortURLBase        string        `env:"BASE_URL" validate:"url"`
-	LogLevel            string        `env:"LOG_LEVEL" validate:"loglevel"`
-	DBFileName          string        `env:"FILE_STORAGE_PATH" validate:"filepath"`
-	DatabaseDSN         string        `env:"DATABASE_DSN"`
-	DBConnectionTimeout time.Duration `env:"DB_CONNECTION_TIMEOUT"`
+	RunAddr                    string        `env:"SERVER_ADDRESS" validate:"hostname_port"`
+	ShortURLBase               string        `env:"BASE_URL" validate:"url"`
+	LogLevel                   string        `env:"LOG_LEVEL" validate:"loglevel"`
+	DBFileName                 string        `env:"FILE_STORAGE_PATH" validate:"filepath"`
+	DatabaseDSN                string        `env:"DATABASE_DSN"`
+	DBConnectionTimeout        time.Duration `env:"DB_CONNECTION_TIMEOUT"`
+	AuthCookieName             string        `env:"AUTH_COOKIE_NAME"`
+	AuthCookieSigningSecretKey string        `env:"AUTH_COOKIE_SIGNING_SECRET_KEY"`
 }
 
 func validateFilePath(fieldLevel validator.FieldLevel) bool {
@@ -82,12 +84,14 @@ func New(optionsProto ...InitOption) (*Config, error) {
 	}
 
 	values := Config{
-		RunAddr:             ":8080",
-		ShortURLBase:        "http://localhost:8080",
-		LogLevel:            "info",
-		DBFileName:          "",
-		DatabaseDSN:         "",
-		DBConnectionTimeout: 10,
+		RunAddr:                    ":8080",
+		ShortURLBase:               "http://localhost:8080",
+		LogLevel:                   "info",
+		DBFileName:                 "",
+		DatabaseDSN:                "",
+		DBConnectionTimeout:        10,
+		AuthCookieName:             "auth",
+		AuthCookieSigningSecretKey: "LduYtmp2gWSRuyQyRHqbog==",
 	}
 	if !options.disableFlagsParsing {
 		flag.StringVar(&values.RunAddr, "a", values.RunAddr, "address and port to run server")
@@ -126,6 +130,14 @@ func New(optionsProto ...InitOption) (*Config, error) {
 
 	if valuesFromEnv.DBConnectionTimeout != 0 {
 		values.DBConnectionTimeout = valuesFromEnv.DBConnectionTimeout
+	}
+
+	if valuesFromEnv.AuthCookieName != "" {
+		values.AuthCookieName = valuesFromEnv.AuthCookieName
+	}
+
+	if valuesFromEnv.AuthCookieSigningSecretKey != "" {
+		values.AuthCookieSigningSecretKey = valuesFromEnv.AuthCookieSigningSecretKey
 	}
 
 	return &values, values.Validate()

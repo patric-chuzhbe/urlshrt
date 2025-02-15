@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
+	"github.com/patric-chuzhbe/urlshrt/internal/user"
 )
 
 type Storage interface {
@@ -44,4 +46,21 @@ type Storage interface {
 	RollbackTransaction(transaction *sql.Tx) error
 
 	CommitTransaction(transaction *sql.Tx) error
+
+	GetUserByID(ctx context.Context, userID int, transaction *sql.Tx) (*user.User, error)
+
+	CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (int, error)
+
+	GetUserUrls(
+		ctx context.Context,
+		userID int,
+		shortURLFormatter func(string) string,
+	) (models.UserUrls, error)
+
+	SaveUserUrls(
+		ctx context.Context,
+		userID int,
+		urls []string,
+		transaction *sql.Tx,
+	) error
 }

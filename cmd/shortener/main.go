@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/patric-chuzhbe/urlshrt/internal/auth"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
 	"github.com/patric-chuzhbe/urlshrt/internal/db/memorystorage"
@@ -84,7 +86,19 @@ func main() {
 		}
 	}()
 
-	httpHandler := router.New(db, cfg.ShortURLBase)
+	authCookieSigningSecretKey, err := base64.URLEncoding.DecodeString(cfg.AuthCookieSigningSecretKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	httpHandler := router.New(
+		db,
+		cfg.ShortURLBase,
+		auth.New(
+			db,
+			cfg.AuthCookieName,
+			authCookieSigningSecretKey,
+		),
+	)
 
 	// Handle SIGINT signal (Ctrl+C)
 	termCh := make(chan os.Signal, 1)

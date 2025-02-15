@@ -3,9 +3,11 @@ package router
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	resty "github.com/go-resty/resty/v2"
+	"github.com/patric-chuzhbe/urlshrt/internal/auth"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
 	"github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
@@ -82,27 +84,39 @@ func TestPostApishortenForGzip(t *testing.T) {
 	}
 
 	// The DB
-	theDB, err := jsondb.New(testDBFileName)
+	db, err := jsondb.New(testDBFileName)
 	require.NoError(t, err)
-	require.NotNil(t, theDB)
+	require.NotNil(t, db)
 	defer func() {
-		err := theDB.Close()
+		err := db.Close()
 		require.NoError(t, err)
 		err = os.Remove(testDBFileName)
 		require.NoError(t, err)
 	}()
 
 	myRouter := router{
-		theDB:        theDB,
+		db:           db,
 		shortURLBase: cfg.ShortURLBase,
 	}
+
+	authCookieSigningSecretKey, err := base64.URLEncoding.DecodeString(cfg.AuthCookieSigningSecretKey)
+	require.NoError(t, err)
+	theAuth := auth.New(
+		db,
+		cfg.AuthCookieName,
+		authCookieSigningSecretKey,
+	)
 
 	router := chi.NewRouter()
 	router.Use(
 		logger.WithLoggingHTTPMiddleware,
 		gzippedhttp.UngzipJSONAndTextHTMLRequest,
 	)
-	router.With(gzippedhttp.GzipResponse).Post(`/api/shorten`, myRouter.PostApishorten)
+	router.With(
+		gzippedhttp.GzipResponse,
+		theAuth.AuthenticateUser,
+		theAuth.RegisterNewUser,
+	).Post(`/api/shorten`, myRouter.PostApishorten)
 
 	srv := httptest.NewServer(router)
 	defer srv.Close()
@@ -231,13 +245,26 @@ func TestPostApishorten(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
+	authCookieSigningSecretKey, err := base64.URLEncoding.DecodeString(cfg.AuthCookieSigningSecretKey)
+	require.NoError(t, err)
+	theAuth := auth.New(
+		theDB,
+		cfg.AuthCookieName,
+		authCookieSigningSecretKey,
+	)
+
 	myRouter := router{
-		theDB:        theDB,
+		db:           theDB,
 		shortURLBase: cfg.ShortURLBase,
 	}
 
-	handler := http.HandlerFunc(myRouter.PostApishorten)
-	srv := httptest.NewServer(handler)
+	router := chi.NewRouter()
+	router.With(
+		theAuth.AuthenticateUser,
+		theAuth.RegisterNewUser,
+	).Post(`/api/shorten`, myRouter.PostApishorten)
+
+	srv := httptest.NewServer(router)
 	defer srv.Close()
 
 	err = logger.Init("debug")
@@ -386,7 +413,7 @@ eshche odna stroka
 			}()
 
 			myRouter := router{
-				theDB:        theDB,
+				db:           theDB,
 				shortURLBase: cfg.ShortURLBase,
 			}
 
@@ -401,7 +428,19 @@ eshche odna stroka
 				)
 				w := httptest.NewRecorder()
 				router := chi.NewRouter()
-				router.Post("/", myRouter.PostShorten)
+
+				authCookieSigningSecretKey, err := base64.URLEncoding.DecodeString(cfg.AuthCookieSigningSecretKey)
+				require.NoError(t, err)
+				theAuth := auth.New(
+					theDB,
+					cfg.AuthCookieName,
+					authCookieSigningSecretKey,
+				)
+
+				router.With(
+					theAuth.AuthenticateUser,
+					theAuth.RegisterNewUser,
+				).Post("/", myRouter.PostShorten)
 				router.ServeHTTP(w, request)
 
 				result := w.Result()

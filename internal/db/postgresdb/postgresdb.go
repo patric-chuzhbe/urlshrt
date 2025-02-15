@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
+	"github.com/patric-chuzhbe/urlshrt/internal/user"
 	"github.com/thoas/go-funk"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,6 +30,160 @@ type queryer interface {
 
 type executor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+func getUsersUrlsTableValues(userID int, urls []string) [][]string {
+	result := [][]string{}
+	for _, url := range urls {
+		result = append(result, []string{strconv.Itoa(userID), url})
+	}
+
+	return result
+}
+
+func (db *PostgresDB) SaveUserUrls(
+	ctx context.Context,
+	userID int,
+	urls []string,
+	transaction *sql.Tx,
+) error {
+	var database executor
+	if transaction == nil {
+		database = db.database
+	} else {
+		database = transaction
+	}
+	usersUrlsTableValues := getUsersUrlsTableValues(userID, urls)
+	usersUrlsTableValuesPlaceholders := make([]string, len(usersUrlsTableValues))
+	for i := range usersUrlsTableValuesPlaceholders {
+		usersUrlsTableValuesPlaceholders[i] = fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2)
+	}
+	usersUrlsTableValuesPlaceholdersAsString := strings.Join(usersUrlsTableValuesPlaceholders, ",")
+	queryParams := funk.Flatten(usersUrlsTableValues).([]string)
+	_, err := database.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`
+				INSERT INTO users_urls (user_id, url)
+					VALUES %s
+					ON CONFLICT (user_id, url) DO UPDATE
+					SET 
+						user_id = EXCLUDED.user_id, 
+						url = EXCLUDED.url;
+			`,
+			usersUrlsTableValuesPlaceholdersAsString,
+		),
+		func(strSlice []string) []interface{} {
+			result := make([]interface{}, len(strSlice))
+			for i, v := range strSlice {
+				result[i] = v
+			}
+
+			return result
+		}(queryParams)...,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *PostgresDB) GetUserUrls(
+	ctx context.Context,
+	userID int,
+	shortURLFormatter func(string) string,
+) (models.UserUrls, error) {
+	formatter := func(str string) string { return str }
+	if shortURLFormatter != nil {
+		formatter = shortURLFormatter
+	}
+
+	rows, err := db.database.QueryContext(
+		ctx,
+		`
+			SELECT short_to_full_url_map_s1ble3.full, short_to_full_url_map_s1ble3.short 
+				FROM short_to_full_url_map_s1ble3
+					JOIN users_urls ON users_urls.url = short_to_full_url_map_s1ble3.full
+						AND users_urls.user_id = $1
+		`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := models.UserUrls{}
+	for rows.Next() {
+		var short, full string
+		err = rows.Scan(&full, &short)
+		if err != nil {
+			return nil, err
+		}
+
+		result = append(
+			result,
+			models.UserURL{
+				ShortURL:    formatter(short),
+				OriginalURL: full,
+			},
+		)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (db *PostgresDB) CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (int, error) {
+	var database queryer
+	if transaction == nil {
+		database = db.database
+	} else {
+		database = transaction
+	}
+
+	row := database.QueryRowContext(
+		ctx,
+		`INSERT INTO users DEFAULT VALUES RETURNING id`,
+	)
+	var userIDFromDB int
+	err := row.Scan(&userIDFromDB)
+	if err != nil {
+		return 0, err
+	}
+
+	return userIDFromDB, nil
+}
+
+func (db *PostgresDB) GetUserByID(ctx context.Context, userID int, transaction *sql.Tx) (*user.User, error) {
+	var database queryer
+
+	if transaction == nil {
+		database = db.database
+	} else {
+		database = transaction
+	}
+
+	row := database.QueryRowContext(
+		ctx,
+		`SELECT id FROM users WHERE id = $1`,
+		userID,
+	)
+	var userIDFromDB int
+	err := row.Scan(&userIDFromDB)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &user.User{ID: 0}, nil
+		}
+		return &user.User{ID: 0}, err
+	}
+
+	return &user.User{ID: userIDFromDB}, nil
 }
 
 func (db *PostgresDB) CommitTransaction(transaction *sql.Tx) (err error) {
@@ -282,8 +439,26 @@ func (db *PostgresDB) createDBStructure(ctx context.Context) error {
 					"full" VARCHAR(255) NOT NULL,
 					CONSTRAINT pk_full PRIMARY KEY ("full"),
 					CONSTRAINT uq_short UNIQUE ("short")
-				)
+				);
+				CREATE TABLE users (
+				   id SERIAL NOT NULL,
+				   CONSTRAINT PK_USERS PRIMARY KEY (id)
+				);
+				CREATE TABLE users_urls (
+				   user_id INT4 NOT NULL,
+				   url VARCHAR(255) NOT NULL,
+				   CONSTRAINT PK_USERS_URLS PRIMARY KEY (user_id, url)
+				);
+				ALTER TABLE users_urls
+				   ADD CONSTRAINT FK_USERS_UR_REFERENCE_USERS FOREIGN KEY (user_id)
+					  REFERENCES USERS (id)
+					  ON DELETE CASCADE ON UPDATE CASCADE;
+				ALTER TABLE users_urls
+				   ADD CONSTRAINT FK_USERS_UR_REFERENCE_SHORT_TO FOREIGN KEY (url)
+					  REFERENCES "%s" ("full")
+					  ON DELETE CASCADE ON UPDATE CASCADE;
 			`,
+			ShortToFullURLMapTableName,
 			ShortToFullURLMapTableName,
 		),
 	)

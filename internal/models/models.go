@@ -20,6 +20,13 @@ type BatchShortenResponseItem struct {
 
 type BatchShortenResponse []BatchShortenResponseItem
 
+type UserURL struct {
+	ShortURL    string `json:"short_url" validate:"required,url"`
+	OriginalURL string `json:"original_url" validate:"required,url"`
+}
+
+type UserUrls []UserURL
+
 const (
 	StorageTypeUnknown = iota
 	StorageTypePostgresql

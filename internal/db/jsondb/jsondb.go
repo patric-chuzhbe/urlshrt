@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
+	"github.com/patric-chuzhbe/urlshrt/internal/user"
 	"os"
 )
 
@@ -14,8 +16,79 @@ type JSONDB struct {
 }
 
 type CacheStruct struct {
-	ShortToFull map[string]string
-	FullToShort map[string]string
+	ShortToFull       map[string]string
+	FullToShort       map[string]string
+	Users             map[int]*user.User
+	NextUserID        int
+	UsersIdsToUrlsMap map[int][]string
+	UrlsToUsersIdsMap map[string][]int
+}
+
+func (db *JSONDB) SaveUserUrls(
+	ctx context.Context,
+	userID int,
+	urls []string,
+	transaction *sql.Tx,
+) error {
+	for _, url := range urls {
+		_, exists := db.Cache.UsersIdsToUrlsMap[userID]
+		if !exists {
+			db.Cache.UsersIdsToUrlsMap[userID] = []string{}
+		}
+		db.Cache.UsersIdsToUrlsMap[userID] = append(db.Cache.UsersIdsToUrlsMap[userID], url)
+
+		_, exists = db.Cache.UrlsToUsersIdsMap[url]
+		if !exists {
+			db.Cache.UrlsToUsersIdsMap[url] = []int{}
+		}
+		db.Cache.UrlsToUsersIdsMap[url] = append(db.Cache.UrlsToUsersIdsMap[url], userID)
+	}
+
+	return nil
+}
+
+func (db *JSONDB) GetUserUrls(
+	ctx context.Context,
+	userID int,
+	shortURLFormatter func(string) string,
+) (models.UserUrls, error) {
+	formatter := func(str string) string { return str }
+	if shortURLFormatter != nil {
+		formatter = shortURLFormatter
+	}
+
+	result := models.UserUrls{}
+	urls, exists := db.Cache.UsersIdsToUrlsMap[userID]
+	if exists {
+		for _, url := range urls {
+			result = append(
+				result,
+				models.UserURL{
+					ShortURL:    formatter(db.Cache.FullToShort[url]),
+					OriginalURL: url,
+				},
+			)
+		}
+	}
+
+	return result, nil
+}
+
+func (db *JSONDB) CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (int, error) {
+	usr.ID = db.Cache.NextUserID
+	db.Cache.Users[db.Cache.NextUserID] = usr
+	userID := db.Cache.NextUserID
+	db.Cache.NextUserID++
+	return userID, nil
+}
+
+func (db *JSONDB) GetUserByID(ctx context.Context, userID int, transaction *sql.Tx) (*user.User, error) {
+	usr, found := db.Cache.Users[userID]
+	if found {
+		return usr, nil
+	}
+
+	return &user.User{ID: 0}, nil
 }
 
 func (db *JSONDB) CommitTransaction(transaction *sql.Tx) error {
@@ -71,7 +144,11 @@ func initDBFile(fileName string) error {
 	}
 	_, err = fmt.Fprintln(dbFile, `{
 	"ShortToFull": {},
-	"FullToShort": {}
+	"FullToShort": {},
+	"Users": {},
+	"NextUserID": 1,
+	"UsersIdsToUrlsMap": {},
+	"UrlsToUsersIdsMap": {}
 }`)
 	if err != nil {
 		return err
