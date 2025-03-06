@@ -3,9 +3,12 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 )
+
+var ErrURLMarkedAsDeleted = errors.New("the URL marked as deleted")
 
 type Storage interface {
 	InsertURLMapping(
@@ -62,5 +65,10 @@ type Storage interface {
 		userID int,
 		urls []string,
 		transaction *sql.Tx,
+	) error
+
+	RemoveUsersUrls(
+		ctx context.Context,
+		usersURLs map[int][]string,
 	) error
 }

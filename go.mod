@@ -1,8 +1,6 @@
 module github.com/patric-chuzhbe/urlshrt
 
-go 1.22
-
-toolchain go1.22.0
+go 1.22.12
 
 require (
 	github.com/caarlos0/env/v6 v6.10.1

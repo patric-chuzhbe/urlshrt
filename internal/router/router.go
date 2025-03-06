@@ -13,6 +13,7 @@ import (
 	gzippedHttp "github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
 	logger "github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
+	"github.com/patric-chuzhbe/urlshrt/internal/urlsremoverinterface"
 	"github.com/thoas/go-funk"
 	"go.uber.org/zap"
 	"io"
@@ -23,11 +24,42 @@ import (
 type router struct {
 	db           storage.Storage
 	shortURLBase string
+	urlsRemover  urlsremoverinterface.URLsRemoverInterface
 }
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
 
 var ErrConflict = errors.New("data conflict")
+
+func (theRouter router) DeleteApiuserurls(response http.ResponseWriter, request *http.Request) {
+	userID, ok := request.Context().Value(auth.UserIDKey).(int)
+	if !ok || userID == 0 {
+		response.WriteHeader(http.StatusUnauthorized)
+
+		return
+	}
+
+	var URLsToDelete models.DeleteURLsRequest
+	if err := json.NewDecoder(request.Body).Decode(&URLsToDelete); err != nil {
+		logger.Log.Debugln("cannot decode request JSON body", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	validate := validator.New()
+	if err := validate.Var(URLsToDelete, "dive"); err != nil {
+		logger.Log.Debugln("incorrect request structure", zap.Error(err))
+		response.WriteHeader(http.StatusUnprocessableEntity)
+		return
+	}
+
+	theRouter.urlsRemover.EnqueueJob(&urlsremoverinterface.Job{
+		UserID:       userID,
+		URLsToDelete: URLsToDelete,
+	})
+
+	response.WriteHeader(http.StatusAccepted)
+}
 
 func (theRouter router) GetApiuserurls(response http.ResponseWriter, request *http.Request) {
 	userID, ok := request.Context().Value(auth.UserIDKey).(int)
@@ -288,6 +320,10 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.Request) {
 	short := chi.URLParam(req, "short")
 	full, found, err := theRouter.db.FindFullByShort(context.Background(), short)
+	if errors.Is(err, storage.ErrURLMarkedAsDeleted) {
+		res.WriteHeader(http.StatusGone)
+		return
+	}
 	if err != nil {
 		logger.Log.Debugln("error while `theRouter.db.FindFullByShort()` calling: ", zap.Error(err))
 		res.WriteHeader(http.StatusInternalServerError)
@@ -407,37 +443,54 @@ func (theRouter router) PostShorten(response http.ResponseWriter, request *http.
 	}
 }
 
-func New(database storage.Storage, shortURLBase string, auth authenticator.Authenticator) *chi.Mux {
+func New(
+	database storage.Storage,
+	shortURLBase string,
+	auth authenticator.Authenticator,
+	urlsRemover urlsremoverinterface.URLsRemoverInterface,
+) *chi.Mux {
 	myRouter := router{
 		db:           database,
 		shortURLBase: shortURLBase,
+		urlsRemover:  urlsRemover,
 	}
 	router := chi.NewRouter()
+
 	router.Use(
 		logger.WithLoggingHTTPMiddleware,
 		gzippedHttp.UngzipJSONAndTextHTMLRequest,
 	)
+
 	router.With(
 		gzippedHttp.GzipResponse,
 		auth.AuthenticateUser,
 		auth.RegisterNewUser,
 	).Post(`/`, myRouter.PostShorten)
+
 	router.Get(`/{short}`, myRouter.GetRedirecttofullurl)
+
 	router.With(
 		gzippedHttp.GzipResponse,
 		auth.AuthenticateUser,
 		auth.RegisterNewUser,
 	).Post(`/api/shorten`, myRouter.PostApishorten)
+
 	router.Get(`/ping`, myRouter.GetPing)
+
 	router.With(
 		gzippedHttp.GzipResponse,
 		auth.AuthenticateUser,
 		auth.RegisterNewUser,
 	).Post(`/api/shorten/batch`, myRouter.PostApishortenbatch)
+
 	router.With(
 		auth.AuthenticateUser,
 		auth.RegisterNewUser,
 	).Get(`/api/user/urls`, myRouter.GetApiuserurls)
+
+	router.With(
+		auth.AuthenticateUser,
+	).Delete(`/api/user/urls`, myRouter.DeleteApiuserurls)
 
 	return router
 }

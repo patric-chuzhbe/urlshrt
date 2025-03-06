@@ -19,6 +19,8 @@ type Config struct {
 	DBConnectionTimeout        time.Duration `env:"DB_CONNECTION_TIMEOUT"`
 	AuthCookieName             string        `env:"AUTH_COOKIE_NAME"`
 	AuthCookieSigningSecretKey string        `env:"AUTH_COOKIE_SIGNING_SECRET_KEY"`
+	ChannelCapacity            int           `env:"CHANNEL_CAPACITY"`
+	DelayBetweenQueueFetches   time.Duration `env:"DELAY_BETWEEN_QUEUE_FETCHES"`
 }
 
 func validateFilePath(fieldLevel validator.FieldLevel) bool {
@@ -92,6 +94,8 @@ func New(optionsProto ...InitOption) (*Config, error) {
 		DBConnectionTimeout:        10,
 		AuthCookieName:             "auth",
 		AuthCookieSigningSecretKey: "LduYtmp2gWSRuyQyRHqbog==",
+		ChannelCapacity:            1024,
+		DelayBetweenQueueFetches:   5,
 	}
 	if !options.disableFlagsParsing {
 		flag.StringVar(&values.RunAddr, "a", values.RunAddr, "address and port to run server")
@@ -138,6 +142,14 @@ func New(optionsProto ...InitOption) (*Config, error) {
 
 	if valuesFromEnv.AuthCookieSigningSecretKey != "" {
 		values.AuthCookieSigningSecretKey = valuesFromEnv.AuthCookieSigningSecretKey
+	}
+
+	if valuesFromEnv.ChannelCapacity != 0 {
+		values.ChannelCapacity = valuesFromEnv.ChannelCapacity
+	}
+
+	if valuesFromEnv.DelayBetweenQueueFetches != 0 {
+		values.DelayBetweenQueueFetches = valuesFromEnv.DelayBetweenQueueFetches
 	}
 
 	return &values, values.Validate()

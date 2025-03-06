@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
+	"github.com/thoas/go-funk"
 	"os"
 )
 
@@ -16,12 +18,30 @@ type JSONDB struct {
 }
 
 type CacheStruct struct {
-	ShortToFull       map[string]string
-	FullToShort       map[string]string
-	Users             map[int]*user.User
-	NextUserID        int
-	UsersIdsToUrlsMap map[int][]string
-	UrlsToUsersIdsMap map[string][]int
+	ShortToFull        map[string]string
+	FullToShort        map[string]string
+	Users              map[int]*user.User
+	NextUserID         int
+	UsersIdsToUrlsMap  map[int][]string
+	UrlsToUsersIdsMap  map[string][]int
+	UrlsToIsDeletedMap map[string]bool
+}
+
+func (db *JSONDB) RemoveUsersUrls(
+	ctx context.Context,
+	usersURLs map[int][]string,
+) error {
+	for userID, shortURLs := range usersURLs {
+		for _, shortURL := range shortURLs {
+			fullURL := db.Cache.ShortToFull[shortURL]
+			usersIds, ok := db.Cache.UrlsToUsersIdsMap[fullURL]
+			if ok && funk.Contains(usersIds, userID) {
+				db.Cache.UrlsToIsDeletedMap[fullURL] = true
+			}
+		}
+	}
+
+	return nil
 }
 
 func (db *JSONDB) SaveUserUrls(
@@ -148,7 +168,8 @@ func initDBFile(fileName string) error {
 	"Users": {},
 	"NextUserID": 1,
 	"UsersIdsToUrlsMap": {},
-	"UrlsToUsersIdsMap": {}
+	"UrlsToUsersIdsMap": {},
+	"UrlsToIsDeletedMap": {}
 }`)
 	if err != nil {
 		return err
@@ -244,6 +265,11 @@ func (db *JSONDB) Close() error {
 func (db *JSONDB) FindFullByShort(ctx context.Context, short string) (full string, found bool, err error) {
 	full, found = db.Cache.ShortToFull[short]
 	err = nil
+
+	isDeleted, ok := db.Cache.UrlsToIsDeletedMap[full]
+	if ok && isDeleted {
+		err = storage.ErrURLMarkedAsDeleted
+	}
 
 	return
 }

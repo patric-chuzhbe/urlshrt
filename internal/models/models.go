@@ -33,3 +33,5 @@ const (
 	StorageTypeFile
 	StorageTypeMemory
 )
+
+type DeleteURLsRequest []string

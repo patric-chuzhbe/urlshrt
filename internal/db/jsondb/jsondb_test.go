@@ -2,6 +2,7 @@ package jsondb
 
 import (
 	"context"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,5 +96,59 @@ func Test(t *testing.T) {
 		usr, err = theStorage.GetUserByID(context.Background(), 10, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, &user.User{ID: 0}, usr)
+
+		userID2, err := theStorage.CreateUser(context.Background(), &user.User{}, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, userID2)
+
+		err = theStorage.SaveUserUrls(
+			context.Background(),
+			userID,
+			[]string{
+				"one",
+				"two",
+			},
+			nil,
+		)
+		assert.NoError(t, err)
+		err = theStorage.SaveUserUrls(
+			context.Background(),
+			userID2,
+			[]string{
+				"three",
+				"some full",
+			},
+			nil,
+		)
+		assert.NoError(t, err)
+
+		err = theStorage.RemoveUsersUrls(
+			context.Background(),
+			map[int][]string{
+				1: {
+					"1-1-1",
+					"2-2-2",
+					"3-3-3",
+					"some short",
+				},
+				2: {
+					"1-1-1",
+					"2-2-2",
+					"3-3-3",
+					"some short",
+				},
+			},
+		)
+		assert.NoError(t, err)
+
+		for _, short := range []string{
+			"1-1-1",
+			"2-2-2",
+			"3-3-3",
+			"some short",
+		} {
+			_, _, err = theStorage.FindFullByShort(context.Background(), short)
+			assert.ErrorIs(t, err, storage.ErrURLMarkedAsDeleted)
+		}
 	})
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/router"
+	"github.com/patric-chuzhbe/urlshrt/internal/urlsremover"
+	"go.uber.org/zap"
 	"log"
 	"net/http"
 	"os"
@@ -90,6 +92,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	urlsRemover := urlsremover.New(
+		db,
+		cfg.ChannelCapacity,
+		cfg.DelayBetweenQueueFetches,
+	)
+	urlsRemover.Run()
+	urlsRemover.ListenErrors(func(err error) {
+		logger.Log.Debugln("Error passed from the `urlsRemover.ListenErrors()`:", zap.Error(err))
+	})
+
 	httpHandler := router.New(
 		db,
 		cfg.ShortURLBase,
@@ -98,6 +111,7 @@ func main() {
 			cfg.AuthCookieName,
 			authCookieSigningSecretKey,
 		),
+		urlsRemover,
 	)
 
 	// Handle SIGINT signal (Ctrl+C)

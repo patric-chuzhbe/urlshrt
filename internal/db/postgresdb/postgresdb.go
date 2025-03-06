@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 	"github.com/thoas/go-funk"
@@ -19,10 +20,6 @@ type PostgresDB struct {
 	connectionTimeout time.Duration
 }
 
-const (
-	ShortToFullURLMapTableName = "short_to_full_url_map_s1ble3"
-)
-
 type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
@@ -30,6 +27,59 @@ type queryer interface {
 
 type executor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+func getUsersUrlsForRemoving(usersURLs map[int][]string) [][]string {
+	result := [][]string{}
+	for userID, urls := range usersURLs {
+		for _, url := range urls {
+			result = append(result, []string{strconv.Itoa(userID), url})
+		}
+	}
+
+	return result
+}
+
+func (db *PostgresDB) RemoveUsersUrls(
+	ctx context.Context,
+	usersURLs map[int][]string,
+) error {
+	usersUrlsForRemoving := getUsersUrlsForRemoving(usersURLs)
+	if len(usersUrlsForRemoving) == 0 {
+		return nil
+	}
+	usersURLsPlaceholders := make([]string, len(usersUrlsForRemoving))
+	for i := range usersURLsPlaceholders {
+		usersURLsPlaceholders[i] = fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2)
+	}
+	usersURLsPlaceholdersAsStr := strings.Join(usersURLsPlaceholders, ",")
+	queryParams := funk.Flatten(usersUrlsForRemoving).([]string)
+	_, err := db.database.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`
+				UPDATE short_to_full_url_map
+					SET is_deleted = true
+					FROM users_urls
+					WHERE short_to_full_url_map.full = users_urls.url
+						AND (users_urls.user_id, short_to_full_url_map.short) IN (%s)
+			`,
+			usersURLsPlaceholdersAsStr,
+		),
+		func(strSlice []string) []interface{} {
+			result := make([]interface{}, len(strSlice))
+			for i, v := range strSlice {
+				result[i] = v
+			}
+
+			return result
+		}(queryParams)...,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func getUsersUrlsTableValues(userID int, urls []string) [][]string {
@@ -54,6 +104,9 @@ func (db *PostgresDB) SaveUserUrls(
 		database = transaction
 	}
 	usersUrlsTableValues := getUsersUrlsTableValues(userID, urls)
+	if len(usersUrlsTableValues) == 0 {
+		return nil
+	}
 	usersUrlsTableValuesPlaceholders := make([]string, len(usersUrlsTableValues))
 	for i := range usersUrlsTableValuesPlaceholders {
 		usersUrlsTableValuesPlaceholders[i] = fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2)
@@ -102,9 +155,9 @@ func (db *PostgresDB) GetUserUrls(
 	rows, err := db.database.QueryContext(
 		ctx,
 		`
-			SELECT short_to_full_url_map_s1ble3.full, short_to_full_url_map_s1ble3.short 
-				FROM short_to_full_url_map_s1ble3
-					JOIN users_urls ON users_urls.url = short_to_full_url_map_s1ble3.full
+			SELECT short_to_full_url_map.full, short_to_full_url_map.short 
+				FROM short_to_full_url_map
+					JOIN users_urls ON users_urls.url = short_to_full_url_map.full
 						AND users_urls.user_id = $1
 		`,
 		userID,
@@ -240,8 +293,7 @@ func (db *PostgresDB) SaveNewFullsAndShorts(
 	_, err := database.ExecContext(
 		ctx,
 		fmt.Sprintf(
-			`INSERT INTO "%s" ("short", "full") VALUES %s`,
-			ShortToFullURLMapTableName,
+			`INSERT INTO short_to_full_url_map ("short", "full") VALUES %s`,
 			shortToFullURLMapTableValuesPlaceholdersAsString,
 		),
 		func(strSlice []string) []interface{} {
@@ -286,8 +338,7 @@ func (db *PostgresDB) FindShortsByFulls(
 	rows, err := database.QueryContext(
 		ctx,
 		fmt.Sprintf(
-			`SELECT "short", "full" FROM "%s" WHERE "full" IN (%s)`,
-			ShortToFullURLMapTableName,
+			`SELECT "short", "full" FROM short_to_full_url_map WHERE "full" IN (%s)`,
 			originalUrlsPlaceholders,
 		),
 		func(strSlice []string) []interface{} {
@@ -339,10 +390,7 @@ func (db *PostgresDB) InsertURLMapping(
 
 	_, err := database.ExecContext(
 		ctx,
-		fmt.Sprintf(
-			`INSERT INTO "%s" ("short", "full") VALUES ($1, $2)`,
-			ShortToFullURLMapTableName,
-		),
+		`INSERT INTO short_to_full_url_map ("short", "full") VALUES ($1, $2)`,
 		short,
 		full,
 	)
@@ -356,19 +404,21 @@ func (db *PostgresDB) InsertURLMapping(
 func (db *PostgresDB) FindFullByShort(ctx context.Context, short string) (string, bool, error) {
 	row := db.database.QueryRowContext(
 		ctx,
-		fmt.Sprintf(
-			`SELECT "full" FROM "%s" WHERE "short" = $1`,
-			ShortToFullURLMapTableName,
-		),
+		`SELECT "full", is_deleted FROM short_to_full_url_map WHERE "short" = $1`,
 		short,
 	)
 	var full string
-	err := row.Scan(&full)
+	var isDeleted bool
+	err := row.Scan(&full, &isDeleted)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", false, nil
 		}
 		return "", false, err
+	}
+
+	if isDeleted {
+		return full, true, storage.ErrURLMarkedAsDeleted
 	}
 
 	return full, true, nil
@@ -389,10 +439,7 @@ func (db *PostgresDB) FindShortByFull(
 
 	row := database.QueryRowContext(
 		ctx,
-		fmt.Sprintf(
-			`SELECT "short" FROM "%s" WHERE "full" = $1`,
-			ShortToFullURLMapTableName,
-		),
+		`SELECT "short" FROM short_to_full_url_map WHERE "full" = $1`,
 		full,
 	)
 	var short string
@@ -410,10 +457,7 @@ func (db *PostgresDB) FindShortByFull(
 func (db *PostgresDB) IsShortExists(ctx context.Context, short string) (bool, error) {
 	row := db.database.QueryRowContext(
 		ctx,
-		fmt.Sprintf(
-			`SELECT COUNT(*) FROM "%s" WHERE "short" = $1`,
-			ShortToFullURLMapTableName,
-		),
+		`SELECT COUNT(*) FROM short_to_full_url_map WHERE "short" = $1`,
 		short,
 	)
 	var shortCount int
@@ -432,35 +476,37 @@ func (db *PostgresDB) IsShortExists(ctx context.Context, short string) (bool, er
 func (db *PostgresDB) createDBStructure(ctx context.Context) error {
 	_, err := db.database.ExecContext(
 		ctx,
-		fmt.Sprintf(
-			`
-				CREATE TABLE "%s" (
-					"short" VARCHAR(255) NOT NULL,
-					"full" VARCHAR(255) NOT NULL,
-					CONSTRAINT pk_full PRIMARY KEY ("full"),
-					CONSTRAINT uq_short UNIQUE ("short")
-				);
-				CREATE TABLE users (
-				   id SERIAL NOT NULL,
-				   CONSTRAINT PK_USERS PRIMARY KEY (id)
-				);
-				CREATE TABLE users_urls (
-				   user_id INT4 NOT NULL,
-				   url VARCHAR(255) NOT NULL,
-				   CONSTRAINT PK_USERS_URLS PRIMARY KEY (user_id, url)
-				);
-				ALTER TABLE users_urls
-				   ADD CONSTRAINT FK_USERS_UR_REFERENCE_USERS FOREIGN KEY (user_id)
-					  REFERENCES USERS (id)
-					  ON DELETE CASCADE ON UPDATE CASCADE;
-				ALTER TABLE users_urls
-				   ADD CONSTRAINT FK_USERS_UR_REFERENCE_SHORT_TO FOREIGN KEY (url)
-					  REFERENCES "%s" ("full")
-					  ON DELETE CASCADE ON UPDATE CASCADE;
-			`,
-			ShortToFullURLMapTableName,
-			ShortToFullURLMapTableName,
-		),
+		`
+			CREATE TABLE short_to_full_url_map (
+			   "full"               VARCHAR(255)         NOT NULL,
+			   short                VARCHAR(255)         NOT NULL,
+			   is_deleted           BOOL                 NOT NULL DEFAULT FALSE,
+			   CONSTRAINT PK_SHORT_TO_FULL_URL_MAP PRIMARY KEY ("full")
+			);
+			
+			CREATE UNIQUE INDEX uq_short ON short_to_full_url_map (short);
+			
+			CREATE TABLE USERS (
+			   id                   SERIAL NOT NULL,
+			   CONSTRAINT PK_USERS PRIMARY KEY (id)
+			);
+			
+			CREATE TABLE users_urls (
+			   user_id              INT4                 NOT NULL,
+			   url                  VARCHAR(255)         NOT NULL,
+			   CONSTRAINT PK_USERS_URLS PRIMARY KEY (user_id, url)
+			);
+			
+			ALTER TABLE users_urls
+			   ADD CONSTRAINT FK_USERS_UR_REFERENCE_USERS FOREIGN KEY (user_id)
+				  REFERENCES users (id)
+				  ON DELETE CASCADE ON UPDATE CASCADE;
+			
+			ALTER TABLE users_urls
+			   ADD CONSTRAINT FK_USERS_UR_REFERENCE_SHORT_TO FOREIGN KEY (url)
+				  REFERENCES short_to_full_url_map ("full")
+				  ON DELETE CASCADE ON UPDATE CASCADE;
+		`,
 	)
 	if err != nil {
 		return err
@@ -475,9 +521,8 @@ func (db *PostgresDB) checkDBStructure(ctx context.Context) (bool, error) {
 		`
 			SELECT COUNT(*)
 				FROM pg_tables 
-				WHERE schemaname = 'public' AND tablename = $1
+				WHERE schemaname = 'public' AND tablename = 'short_to_full_url_map'
 		`,
-		ShortToFullURLMapTableName,
 	)
 	var tableCount int
 	err := row.Scan(&tableCount)

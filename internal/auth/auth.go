@@ -31,6 +31,19 @@ type ContextKey string
 
 const UserIDKey ContextKey = "userID"
 
+func (a *Auth) getTokenStringFromAuthorizationHeaderOrCookie(request *http.Request) string {
+	tokenString := request.Header.Get("Authorization")
+	if tokenString != "" {
+		return tokenString
+	}
+	cookie, err := request.Cookie(a.authCookieName)
+	if err == nil {
+		tokenString = cookie.Value
+	}
+
+	return tokenString
+}
+
 func (a *Auth) RegisterNewUser(h http.Handler) http.Handler {
 	middleware := func(response http.ResponseWriter, request *http.Request) {
 		userID, ok := request.Context().Value(UserIDKey).(int)
@@ -73,8 +86,8 @@ func (a *Auth) RegisterNewUser(h http.Handler) http.Handler {
 	return http.HandlerFunc(middleware)
 }
 
-func (a *Auth) getUserIDFromAuthorizationHeader(request *http.Request) (int, error) {
-	tokenString := request.Header.Get("Authorization")
+func (a *Auth) getUserIDFromAuthorizationHeaderOrCookie(request *http.Request) (int, error) {
+	tokenString := a.getTokenStringFromAuthorizationHeaderOrCookie(request)
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(
 		tokenString,
@@ -95,9 +108,9 @@ func (a *Auth) getUserIDFromAuthorizationHeader(request *http.Request) (int, err
 
 func (a *Auth) AuthenticateUser(h http.Handler) http.Handler {
 	middleware := func(response http.ResponseWriter, request *http.Request) {
-		userID, err := a.getUserIDFromAuthorizationHeader(request)
+		userID, err := a.getUserIDFromAuthorizationHeaderOrCookie(request)
 		if err != nil {
-			logger.Log.Debugln("Error calling the `a.getUserIDFromAuthorizationHeader()`: ", zap.Error(err))
+			logger.Log.Debugln("Error calling the `a.getUserIDFromAuthorizationHeaderOrCookie()`: ", zap.Error(err))
 			response.WriteHeader(http.StatusInternalServerError)
 			return
 		}
