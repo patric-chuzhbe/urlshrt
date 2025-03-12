@@ -1,5 +1,5 @@
 package user
 
 type User struct {
-	ID int
+	ID string
 }

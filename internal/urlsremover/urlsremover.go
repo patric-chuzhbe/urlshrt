@@ -2,20 +2,26 @@ package urlsremover
 
 import (
 	"context"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
-	"github.com/patric-chuzhbe/urlshrt/internal/urlsremoverinterface"
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"time"
 )
 
+type userUrlsKeeper interface {
+	RemoveUsersUrls(
+		ctx context.Context,
+		usersURLs map[string][]string,
+	) error
+}
+
 type task struct {
-	userID      int
+	userID      string
 	urlToDelete string
 }
 
 type UrlsRemover struct {
 	queue                    chan *task
-	db                       storage.Storage
+	db                       userUrlsKeeper
 	delayBetweenQueueFetches time.Duration
 	errorChannel             chan error
 }
@@ -28,8 +34,8 @@ func (r *UrlsRemover) ListenErrors(callback func(error)) {
 	}()
 }
 
-func (r *UrlsRemover) collectUrlsByUser(tasks []task) map[int][]string {
-	result := map[int][]string{}
+func (r *UrlsRemover) collectUrlsByUser(tasks []task) map[string][]string {
+	result := map[string][]string{}
 	for _, t := range tasks {
 		_, ok := result[t.userID]
 		if !ok {
@@ -41,14 +47,18 @@ func (r *UrlsRemover) collectUrlsByUser(tasks []task) map[int][]string {
 	return result
 }
 
-func (r *UrlsRemover) Run() {
+func (r *UrlsRemover) Run(ctx context.Context) {
 	go func() {
-		ticker := time.NewTicker(r.delayBetweenQueueFetches * time.Second)
+		ticker := time.NewTicker(r.delayBetweenQueueFetches)
+		defer ticker.Stop()
 
 		var tasks []task
 
 		for {
 			select {
+			case <-ctx.Done():
+				logger.Log.Infoln("UrlsRemover.Run() stopped")
+				return
 			case t := <-r.queue:
 				tasks = append(tasks, *t)
 			case <-ticker.C:
@@ -68,7 +78,7 @@ func (r *UrlsRemover) Run() {
 }
 
 func New(
-	db storage.Storage,
+	db userUrlsKeeper,
 	channelCapacity int,
 	delayBetweenQueueFetches time.Duration,
 ) *UrlsRemover {
@@ -80,7 +90,7 @@ func New(
 	}
 }
 
-func (r *UrlsRemover) EnqueueJob(job *urlsremoverinterface.Job) {
+func (r *UrlsRemover) EnqueueJob(job *models.URLDeleteJob) {
 	for _, URLId := range job.URLsToDelete {
 		r.queue <- &task{
 			userID:      job.UserID,

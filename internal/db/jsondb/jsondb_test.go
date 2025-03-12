@@ -2,7 +2,7 @@ package jsondb
 
 import (
 	"context"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,19 +87,17 @@ func Test(t *testing.T) {
 
 		userID, err := theStorage.CreateUser(context.Background(), &user.User{}, nil)
 		assert.NoError(t, err)
-		assert.Equal(t, 1, userID)
 
-		usr, err := theStorage.GetUserByID(context.Background(), 1, nil)
+		usr, err := theStorage.GetUserByID(context.Background(), userID, nil)
 		assert.NoError(t, err)
-		assert.Equal(t, &user.User{ID: 1}, usr)
+		assert.Equal(t, &user.User{ID: userID}, usr)
 
-		usr, err = theStorage.GetUserByID(context.Background(), 10, nil)
+		usr, err = theStorage.GetUserByID(context.Background(), "UNEXISTENT", nil)
 		assert.NoError(t, err)
-		assert.Equal(t, &user.User{ID: 0}, usr)
+		assert.Equal(t, &user.User{ID: ""}, usr)
 
 		userID2, err := theStorage.CreateUser(context.Background(), &user.User{}, nil)
 		assert.NoError(t, err)
-		assert.Equal(t, 2, userID2)
 
 		err = theStorage.SaveUserUrls(
 			context.Background(),
@@ -124,14 +122,14 @@ func Test(t *testing.T) {
 
 		err = theStorage.RemoveUsersUrls(
 			context.Background(),
-			map[int][]string{
-				1: {
+			map[string][]string{
+				userID: {
 					"1-1-1",
 					"2-2-2",
 					"3-3-3",
 					"some short",
 				},
-				2: {
+				userID2: {
 					"1-1-1",
 					"2-2-2",
 					"3-3-3",
@@ -148,7 +146,7 @@ func Test(t *testing.T) {
 			"some short",
 		} {
 			_, _, err = theStorage.FindFullByShort(context.Background(), short)
-			assert.ErrorIs(t, err, storage.ErrURLMarkedAsDeleted)
+			assert.ErrorIs(t, err, models.ErrURLMarkedAsDeleted)
 		}
 	})
 }

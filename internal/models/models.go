@@ -1,5 +1,7 @@
 package models
 
+import "errors"
+
 type ShortenRequest struct {
 	URL string `json:"url" validate:"required,url"`
 }
@@ -35,3 +37,10 @@ const (
 )
 
 type DeleteURLsRequest []string
+
+var ErrURLMarkedAsDeleted = errors.New("the URL marked as deleted")
+
+type URLDeleteJob struct {
+	UserID       string
+	URLsToDelete DeleteURLsRequest
+}

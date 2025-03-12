@@ -16,10 +16,9 @@ func New() (*MemoryStorage, error) {
 			Cache: jsondb.CacheStruct{
 				ShortToFull:        map[string]string{},
 				FullToShort:        map[string]string{},
-				Users:              map[int]*user.User{},
-				NextUserID:         1,
-				UsersIdsToUrlsMap:  map[int][]string{},
-				UrlsToUsersIdsMap:  map[string][]int{},
+				Users:              map[string]*user.User{},
+				UsersIdsToUrlsMap:  map[string][]string{},
+				UrlsToUsersIdsMap:  map[string][]string{},
 				UrlsToIsDeletedMap: map[string]bool{},
 			},
 		},

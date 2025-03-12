@@ -2,29 +2,29 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"github.com/golang-jwt/jwt/v4"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 	"go.uber.org/zap"
 	"net/http"
 )
 
+type userKeeper interface {
+	CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (string, error)
+	GetUserByID(ctx context.Context, userID string, transaction *sql.Tx) (*user.User, error)
+}
+
 type Auth struct {
-	db                         storage.Storage
+	db                         userKeeper
 	authCookieName             string
 	authCookieSigningSecretKey []byte
 }
 
-type Config struct {
-	AuthCookieName             string
-	AuthCookieSigningSecretKey []byte
-}
-
 type Claims struct {
 	jwt.RegisteredClaims
-	UserID int `json:"user_id"`
+	UserID string `json:"user_id"`
 }
 
 type ContextKey string
@@ -46,8 +46,8 @@ func (a *Auth) getTokenStringFromAuthorizationHeaderOrCookie(request *http.Reque
 
 func (a *Auth) RegisterNewUser(h http.Handler) http.Handler {
 	middleware := func(response http.ResponseWriter, request *http.Request) {
-		userID, ok := request.Context().Value(UserIDKey).(int)
-		if ok && userID > 0 {
+		userID, ok := request.Context().Value(UserIDKey).(string)
+		if ok && userID != "" {
 			h.ServeHTTP(response, request)
 
 			return
@@ -86,7 +86,7 @@ func (a *Auth) RegisterNewUser(h http.Handler) http.Handler {
 	return http.HandlerFunc(middleware)
 }
 
-func (a *Auth) getUserIDFromAuthorizationHeaderOrCookie(request *http.Request) (int, error) {
+func (a *Auth) getUserIDFromAuthorizationHeaderOrCookie(request *http.Request) (string, error) {
 	tokenString := a.getTokenStringFromAuthorizationHeaderOrCookie(request)
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(
@@ -100,7 +100,7 @@ func (a *Auth) getUserIDFromAuthorizationHeaderOrCookie(request *http.Request) (
 		},
 	)
 	if err != nil || !token.Valid {
-		return 0, nil
+		return "", nil
 	}
 
 	return claims.UserID, nil
@@ -132,12 +132,12 @@ func (a *Auth) AuthenticateUser(h http.Handler) http.Handler {
 }
 
 func New(
-	theDB storage.Storage,
+	db userKeeper,
 	authCookieName string,
 	authCookieSigningSecretKey []byte,
 ) *Auth {
 	return &Auth{
-		db:                         theDB,
+		db:                         db,
 		authCookieName:             authCookieName,
 		authCookieSigningSecretKey: authCookieSigningSecretKey,
 	}

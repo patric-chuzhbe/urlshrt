@@ -2,18 +2,16 @@ package router
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
-	chi "github.com/go-chi/chi/v5"
-	validator "github.com/go-playground/validator/v10"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	"github.com/patric-chuzhbe/urlshrt/internal/auth"
-	"github.com/patric-chuzhbe/urlshrt/internal/authenticator"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	gzippedHttp "github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
-	logger "github.com/patric-chuzhbe/urlshrt/internal/logger"
+	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
-	"github.com/patric-chuzhbe/urlshrt/internal/urlsremoverinterface"
 	"github.com/thoas/go-funk"
 	"go.uber.org/zap"
 	"io"
@@ -21,10 +19,82 @@ import (
 	"regexp"
 )
 
+type authenticator interface {
+	AuthenticateUser(h http.Handler) http.Handler
+	RegisterNewUser(h http.Handler) http.Handler
+}
+
+type urlsRemover interface {
+	EnqueueJob(job *models.URLDeleteJob)
+}
+
+type userUrlsKeeper interface {
+	GetUserUrls(
+		ctx context.Context,
+		userID string,
+		shortURLFormatter func(string) string,
+	) (models.UserUrls, error)
+
+	SaveUserUrls(
+		ctx context.Context,
+		userID string,
+		urls []string,
+		transaction *sql.Tx,
+	) error
+}
+
+type transactioner interface {
+	BeginTransaction() (*sql.Tx, error)
+
+	RollbackTransaction(transaction *sql.Tx) error
+
+	CommitTransaction(transaction *sql.Tx) error
+}
+
+type urlsMapper interface {
+	FindShortsByFulls(
+		ctx context.Context,
+		originalUrls []string,
+		transaction *sql.Tx,
+	) (map[string]string, error)
+
+	SaveNewFullsAndShorts(
+		ctx context.Context,
+		unexistentFullsToShortsMap map[string]string,
+		transaction *sql.Tx,
+	) error
+
+	FindFullByShort(ctx context.Context, short string) (string, bool, error)
+
+	FindShortByFull(
+		ctx context.Context,
+		full string,
+		transaction *sql.Tx,
+	) (string, bool, error)
+
+	InsertURLMapping(
+		ctx context.Context,
+		short,
+		full string,
+		transaction *sql.Tx,
+	) error
+}
+
+type pinger interface {
+	Ping(ctx context.Context) error
+}
+
+type storage interface {
+	userUrlsKeeper
+	transactioner
+	urlsMapper
+	pinger
+}
+
 type router struct {
-	db           storage.Storage
+	db           storage
 	shortURLBase string
-	urlsRemover  urlsremoverinterface.URLsRemoverInterface
+	urlsRemover  urlsRemover
 }
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
@@ -32,8 +102,8 @@ var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
 var ErrConflict = errors.New("data conflict")
 
 func (theRouter router) DeleteApiuserurls(response http.ResponseWriter, request *http.Request) {
-	userID, ok := request.Context().Value(auth.UserIDKey).(int)
-	if !ok || userID == 0 {
+	userID, ok := request.Context().Value(auth.UserIDKey).(string)
+	if !ok || userID == "" {
 		response.WriteHeader(http.StatusUnauthorized)
 
 		return
@@ -53,7 +123,7 @@ func (theRouter router) DeleteApiuserurls(response http.ResponseWriter, request 
 		return
 	}
 
-	theRouter.urlsRemover.EnqueueJob(&urlsremoverinterface.Job{
+	theRouter.urlsRemover.EnqueueJob(&models.URLDeleteJob{
 		UserID:       userID,
 		URLsToDelete: URLsToDelete,
 	})
@@ -62,8 +132,8 @@ func (theRouter router) DeleteApiuserurls(response http.ResponseWriter, request 
 }
 
 func (theRouter router) GetApiuserurls(response http.ResponseWriter, request *http.Request) {
-	userID, ok := request.Context().Value(auth.UserIDKey).(int)
-	if !ok || userID == 0 {
+	userID, ok := request.Context().Value(auth.UserIDKey).(string)
+	if !ok || userID == "" {
 		response.WriteHeader(http.StatusUnauthorized)
 
 		return
@@ -201,7 +271,7 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 		return
 	}
 
-	userID, ok := request.Context().Value(auth.UserIDKey).(int)
+	userID, ok := request.Context().Value(auth.UserIDKey).(string)
 	if !ok {
 		logger.Log.Debugln("The `userID` value was not found in the request's context")
 		response.WriteHeader(http.StatusUnauthorized)
@@ -285,7 +355,7 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 		return
 	}
 
-	userID, ok := request.Context().Value(auth.UserIDKey).(int)
+	userID, ok := request.Context().Value(auth.UserIDKey).(string)
 	if !ok {
 		logger.Log.Debugln("The `userID` value was not found in the request's context")
 		response.WriteHeader(http.StatusUnauthorized)
@@ -320,7 +390,7 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.Request) {
 	short := chi.URLParam(req, "short")
 	full, found, err := theRouter.db.FindFullByShort(context.Background(), short)
-	if errors.Is(err, storage.ErrURLMarkedAsDeleted) {
+	if errors.Is(err, models.ErrURLMarkedAsDeleted) {
 		res.WriteHeader(http.StatusGone)
 		return
 	}
@@ -336,7 +406,7 @@ func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.
 	http.Redirect(res, req, full, http.StatusTemporaryRedirect)
 }
 
-func (theRouter router) getShortKey(urlToShort string, userID int) (string, error) {
+func (theRouter router) getShortKey(urlToShort string, userID string) (string, error) {
 	transaction, err := theRouter.db.BeginTransaction()
 	if err != nil {
 		return "", err
@@ -416,7 +486,7 @@ func (theRouter router) PostShorten(response http.ResponseWriter, request *http.
 		return
 	}
 
-	userID, ok := request.Context().Value(auth.UserIDKey).(int)
+	userID, ok := request.Context().Value(auth.UserIDKey).(string)
 	if !ok {
 		logger.Log.Debugln("The `userID` value was not found in the request's context")
 		response.WriteHeader(http.StatusUnauthorized)
@@ -444,10 +514,10 @@ func (theRouter router) PostShorten(response http.ResponseWriter, request *http.
 }
 
 func New(
-	database storage.Storage,
+	database storage,
 	shortURLBase string,
-	auth authenticator.Authenticator,
-	urlsRemover urlsremoverinterface.URLsRemoverInterface,
+	auth authenticator,
+	urlsRemover urlsRemover,
 ) *chi.Mux {
 	myRouter := router{
 		db:           database,

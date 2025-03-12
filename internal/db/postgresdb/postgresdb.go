@@ -6,11 +6,9 @@ import (
 	"errors"
 	"fmt"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 	"github.com/thoas/go-funk"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -29,11 +27,11 @@ type executor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 }
 
-func getUsersUrlsForRemoving(usersURLs map[int][]string) [][]string {
+func getUsersUrlsForRemoving(usersURLs map[string][]string) [][]string {
 	result := [][]string{}
 	for userID, urls := range usersURLs {
 		for _, url := range urls {
-			result = append(result, []string{strconv.Itoa(userID), url})
+			result = append(result, []string{userID, url})
 		}
 	}
 
@@ -42,7 +40,7 @@ func getUsersUrlsForRemoving(usersURLs map[int][]string) [][]string {
 
 func (db *PostgresDB) RemoveUsersUrls(
 	ctx context.Context,
-	usersURLs map[int][]string,
+	usersURLs map[string][]string,
 ) error {
 	usersUrlsForRemoving := getUsersUrlsForRemoving(usersURLs)
 	if len(usersUrlsForRemoving) == 0 {
@@ -82,10 +80,10 @@ func (db *PostgresDB) RemoveUsersUrls(
 	return nil
 }
 
-func getUsersUrlsTableValues(userID int, urls []string) [][]string {
+func getUsersUrlsTableValues(userID string, urls []string) [][]string {
 	result := [][]string{}
 	for _, url := range urls {
-		result = append(result, []string{strconv.Itoa(userID), url})
+		result = append(result, []string{userID, url})
 	}
 
 	return result
@@ -93,7 +91,7 @@ func getUsersUrlsTableValues(userID int, urls []string) [][]string {
 
 func (db *PostgresDB) SaveUserUrls(
 	ctx context.Context,
-	userID int,
+	userID string,
 	urls []string,
 	transaction *sql.Tx,
 ) error {
@@ -144,7 +142,7 @@ func (db *PostgresDB) SaveUserUrls(
 
 func (db *PostgresDB) GetUserUrls(
 	ctx context.Context,
-	userID int,
+	userID string,
 	shortURLFormatter func(string) string,
 ) (models.UserUrls, error) {
 	formatter := func(str string) string { return str }
@@ -192,7 +190,7 @@ func (db *PostgresDB) GetUserUrls(
 	return result, nil
 }
 
-func (db *PostgresDB) CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (int, error) {
+func (db *PostgresDB) CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (string, error) {
 	var database queryer
 	if transaction == nil {
 		database = db.database
@@ -204,16 +202,16 @@ func (db *PostgresDB) CreateUser(ctx context.Context, usr *user.User, transactio
 		ctx,
 		`INSERT INTO users DEFAULT VALUES RETURNING id`,
 	)
-	var userIDFromDB int
+	var userIDFromDB string
 	err := row.Scan(&userIDFromDB)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	return userIDFromDB, nil
 }
 
-func (db *PostgresDB) GetUserByID(ctx context.Context, userID int, transaction *sql.Tx) (*user.User, error) {
+func (db *PostgresDB) GetUserByID(ctx context.Context, userID string, transaction *sql.Tx) (*user.User, error) {
 	var database queryer
 
 	if transaction == nil {
@@ -222,18 +220,22 @@ func (db *PostgresDB) GetUserByID(ctx context.Context, userID int, transaction *
 		database = transaction
 	}
 
+	if userID == "" {
+		return &user.User{ID: ""}, nil
+	}
+
 	row := database.QueryRowContext(
 		ctx,
 		`SELECT id FROM users WHERE id = $1`,
 		userID,
 	)
-	var userIDFromDB int
+	var userIDFromDB string
 	err := row.Scan(&userIDFromDB)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return &user.User{ID: 0}, nil
+			return &user.User{ID: ""}, nil
 		}
-		return &user.User{ID: 0}, err
+		return &user.User{ID: ""}, err
 	}
 
 	return &user.User{ID: userIDFromDB}, nil
@@ -418,7 +420,7 @@ func (db *PostgresDB) FindFullByShort(ctx context.Context, short string) (string
 	}
 
 	if isDeleted {
-		return full, true, storage.ErrURLMarkedAsDeleted
+		return full, true, models.ErrURLMarkedAsDeleted
 	}
 
 	return full, true, nil
@@ -487,12 +489,12 @@ func (db *PostgresDB) createDBStructure(ctx context.Context) error {
 			CREATE UNIQUE INDEX uq_short ON short_to_full_url_map (short);
 			
 			CREATE TABLE USERS (
-			   id                   SERIAL NOT NULL,
+			   id UUID NOT NULL DEFAULT gen_random_uuid(),
 			   CONSTRAINT PK_USERS PRIMARY KEY (id)
 			);
 			
 			CREATE TABLE users_urls (
-			   user_id              INT4                 NOT NULL,
+			   user_id              UUID                 NOT NULL,
 			   url                  VARCHAR(255)         NOT NULL,
 			   CONSTRAINT PK_USERS_URLS PRIMARY KEY (user_id, url)
 			);
@@ -572,7 +574,7 @@ func New(
 }
 
 func (db *PostgresDB) Ping(ctx context.Context) error {
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, db.connectionTimeout*time.Second)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, db.connectionTimeout)
 	defer cancel()
 
 	return db.database.PingContext(ctxWithTimeout)

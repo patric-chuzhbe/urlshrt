@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/storage"
+	"github.com/google/uuid"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 	"github.com/thoas/go-funk"
@@ -20,16 +20,15 @@ type JSONDB struct {
 type CacheStruct struct {
 	ShortToFull        map[string]string
 	FullToShort        map[string]string
-	Users              map[int]*user.User
-	NextUserID         int
-	UsersIdsToUrlsMap  map[int][]string
-	UrlsToUsersIdsMap  map[string][]int
+	Users              map[string]*user.User
+	UsersIdsToUrlsMap  map[string][]string
+	UrlsToUsersIdsMap  map[string][]string
 	UrlsToIsDeletedMap map[string]bool
 }
 
 func (db *JSONDB) RemoveUsersUrls(
 	ctx context.Context,
-	usersURLs map[int][]string,
+	usersURLs map[string][]string,
 ) error {
 	for userID, shortURLs := range usersURLs {
 		for _, shortURL := range shortURLs {
@@ -46,7 +45,7 @@ func (db *JSONDB) RemoveUsersUrls(
 
 func (db *JSONDB) SaveUserUrls(
 	ctx context.Context,
-	userID int,
+	userID string,
 	urls []string,
 	transaction *sql.Tx,
 ) error {
@@ -59,7 +58,7 @@ func (db *JSONDB) SaveUserUrls(
 
 		_, exists = db.Cache.UrlsToUsersIdsMap[url]
 		if !exists {
-			db.Cache.UrlsToUsersIdsMap[url] = []int{}
+			db.Cache.UrlsToUsersIdsMap[url] = []string{}
 		}
 		db.Cache.UrlsToUsersIdsMap[url] = append(db.Cache.UrlsToUsersIdsMap[url], userID)
 	}
@@ -69,7 +68,7 @@ func (db *JSONDB) SaveUserUrls(
 
 func (db *JSONDB) GetUserUrls(
 	ctx context.Context,
-	userID int,
+	userID string,
 	shortURLFormatter func(string) string,
 ) (models.UserUrls, error) {
 	formatter := func(str string) string { return str }
@@ -94,21 +93,19 @@ func (db *JSONDB) GetUserUrls(
 	return result, nil
 }
 
-func (db *JSONDB) CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (int, error) {
-	usr.ID = db.Cache.NextUserID
-	db.Cache.Users[db.Cache.NextUserID] = usr
-	userID := db.Cache.NextUserID
-	db.Cache.NextUserID++
-	return userID, nil
+func (db *JSONDB) CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (string, error) {
+	usr.ID = uuid.New().String()
+	db.Cache.Users[usr.ID] = usr
+	return usr.ID, nil
 }
 
-func (db *JSONDB) GetUserByID(ctx context.Context, userID int, transaction *sql.Tx) (*user.User, error) {
+func (db *JSONDB) GetUserByID(ctx context.Context, userID string, transaction *sql.Tx) (*user.User, error) {
 	usr, found := db.Cache.Users[userID]
 	if found {
 		return usr, nil
 	}
 
-	return &user.User{ID: 0}, nil
+	return &user.User{ID: ""}, nil
 }
 
 func (db *JSONDB) CommitTransaction(transaction *sql.Tx) error {
@@ -166,7 +163,6 @@ func initDBFile(fileName string) error {
 	"ShortToFull": {},
 	"FullToShort": {},
 	"Users": {},
-	"NextUserID": 1,
 	"UsersIdsToUrlsMap": {},
 	"UrlsToUsersIdsMap": {},
 	"UrlsToIsDeletedMap": {}
@@ -268,7 +264,7 @@ func (db *JSONDB) FindFullByShort(ctx context.Context, short string) (full strin
 
 	isDeleted, ok := db.Cache.UrlsToIsDeletedMap[full]
 	if ok && isDeleted {
-		err = storage.ErrURLMarkedAsDeleted
+		err = models.ErrURLMarkedAsDeleted
 	}
 
 	return
