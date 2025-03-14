@@ -27,52 +27,41 @@ type executor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 }
 
-func getUsersUrlsForRemoving(usersURLs map[string][]string) [][]string {
-	result := [][]string{}
-	for userID, urls := range usersURLs {
-		for _, url := range urls {
-			result = append(result, []string{userID, url})
-		}
-	}
-
-	return result
-}
-
 func (db *PostgresDB) RemoveUsersUrls(
 	ctx context.Context,
 	usersURLs map[string][]string,
 ) error {
-	usersUrlsForRemoving := getUsersUrlsForRemoving(usersURLs)
-	if len(usersUrlsForRemoving) == 0 {
-		return nil
+	transaction, err := db.database.Begin()
+	if err != nil {
+		return err
 	}
-	usersURLsPlaceholders := make([]string, len(usersUrlsForRemoving))
-	for i := range usersURLsPlaceholders {
-		usersURLsPlaceholders[i] = fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2)
-	}
-	usersURLsPlaceholdersAsStr := strings.Join(usersURLsPlaceholders, ",")
-	queryParams := funk.Flatten(usersUrlsForRemoving).([]string)
-	_, err := db.database.ExecContext(
-		ctx,
-		fmt.Sprintf(
-			`
-				UPDATE short_to_full_url_map
-					SET is_deleted = true
-					FROM users_urls
-					WHERE short_to_full_url_map.full = users_urls.url
-						AND (users_urls.user_id, short_to_full_url_map.short) IN (%s)
-			`,
-			usersURLsPlaceholdersAsStr,
-		),
-		func(strSlice []string) []interface{} {
-			result := make([]interface{}, len(strSlice))
-			for i, v := range strSlice {
-				result[i] = v
-			}
 
-			return result
-		}(queryParams)...,
-	)
+	for userID, URLs := range usersURLs {
+		for _, URL := range URLs {
+			_, err := transaction.ExecContext(
+				ctx,
+				`
+					UPDATE short_to_full_url_map
+						SET is_deleted = true
+						FROM users_urls
+						WHERE short_to_full_url_map.full = users_urls.url
+							AND users_urls.user_id = $1
+							AND short_to_full_url_map.short = $2
+				`,
+				userID,
+				URL,
+			)
+			if err != nil {
+				err2 := transaction.Rollback()
+				if err2 != nil {
+					return err2
+				}
+				return err
+			}
+		}
+	}
+
+	err = transaction.Commit()
 	if err != nil {
 		return err
 	}

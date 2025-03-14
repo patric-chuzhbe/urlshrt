@@ -138,7 +138,7 @@ func (theRouter router) GetApiuserurls(response http.ResponseWriter, request *ht
 
 		return
 	}
-	responseDTO, err := theRouter.db.GetUserUrls(context.Background(), userID, theRouter.getShortURL)
+	responseDTO, err := theRouter.db.GetUserUrls(request.Context(), userID, theRouter.getShortURL)
 	if err != nil {
 		logger.Log.Debugln("Error calling the `theRouter.db.GetUserUrls()`: ", zap.Error(err))
 		response.WriteHeader(http.StatusInternalServerError)
@@ -243,7 +243,7 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 
 	originalUrls := funk.Keys(originalURLToCorrelationIDMap).([]string)
 
-	existentFullsToShortsMap, err := theRouter.db.FindShortsByFulls(context.Background(), originalUrls, transaction)
+	existentFullsToShortsMap, err := theRouter.db.FindShortsByFulls(request.Context(), originalUrls, transaction)
 	if err != nil {
 		err2 := theRouter.db.RollbackTransaction(transaction)
 		if err2 != nil {
@@ -259,7 +259,7 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 	unexistentFullsAsInterface, _ := funk.Difference(originalUrls, existentFulls)
 	unexistentFulls := unexistentFullsAsInterface.([]string)
 	unexistentFullsToShortsMap := theRouter.getUnexistentFullsToShortsMap(unexistentFulls)
-	err = theRouter.db.SaveNewFullsAndShorts(context.Background(), unexistentFullsToShortsMap, transaction)
+	err = theRouter.db.SaveNewFullsAndShorts(request.Context(), unexistentFullsToShortsMap, transaction)
 	if err != nil {
 		err2 := theRouter.db.RollbackTransaction(transaction)
 		if err2 != nil {
@@ -280,7 +280,7 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 	}
 
 	err = theRouter.db.SaveUserUrls(
-		context.Background(),
+		request.Context(),
 		userID,
 		funk.Uniq(funk.Union(existentFulls, unexistentFulls)).([]string),
 		transaction,
@@ -325,7 +325,7 @@ func (theRouter router) getShortURL(shortKey string) string {
 }
 
 func (theRouter router) GetPing(response http.ResponseWriter, request *http.Request) {
-	err := theRouter.db.Ping(context.Background())
+	err := theRouter.db.Ping(request.Context())
 	if err != nil {
 		response.WriteHeader(http.StatusInternalServerError)
 
@@ -363,7 +363,7 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 	}
 
 	urlToShort := requestDTO.URL
-	shortKey, err := theRouter.getShortKey(urlToShort, userID)
+	shortKey, err := theRouter.getShortKey(request.Context(), urlToShort, userID)
 	if err != nil && !errors.Is(err, ErrConflict) {
 		logger.Log.Debugln("error while `theRouter.getShortKey()` calling: ", zap.Error(err))
 		response.WriteHeader(http.StatusInternalServerError)
@@ -389,7 +389,7 @@ func (theRouter router) PostApishorten(response http.ResponseWriter, request *ht
 
 func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.Request) {
 	short := chi.URLParam(req, "short")
-	full, found, err := theRouter.db.FindFullByShort(context.Background(), short)
+	full, found, err := theRouter.db.FindFullByShort(req.Context(), short)
 	if errors.Is(err, models.ErrURLMarkedAsDeleted) {
 		res.WriteHeader(http.StatusGone)
 		return
@@ -406,13 +406,13 @@ func (theRouter router) GetRedirecttofullurl(res http.ResponseWriter, req *http.
 	http.Redirect(res, req, full, http.StatusTemporaryRedirect)
 }
 
-func (theRouter router) getShortKey(urlToShort string, userID string) (string, error) {
+func (theRouter router) getShortKey(ctx context.Context, urlToShort string, userID string) (string, error) {
 	transaction, err := theRouter.db.BeginTransaction()
 	if err != nil {
 		return "", err
 	}
 
-	short, found, err := theRouter.db.FindShortByFull(context.Background(), urlToShort, transaction)
+	short, found, err := theRouter.db.FindShortByFull(ctx, urlToShort, transaction)
 	if err != nil {
 		_ = theRouter.db.RollbackTransaction(transaction)
 
@@ -429,7 +429,7 @@ func (theRouter router) getShortKey(urlToShort string, userID string) (string, e
 
 	if !found {
 		short = uuid.New().String()
-		err = theRouter.db.InsertURLMapping(context.Background(), short, urlToShort, transaction)
+		err = theRouter.db.InsertURLMapping(ctx, short, urlToShort, transaction)
 		if err != nil {
 			_ = theRouter.db.RollbackTransaction(transaction)
 
@@ -439,7 +439,7 @@ func (theRouter router) getShortKey(urlToShort string, userID string) (string, e
 		resultErr = nil
 	}
 
-	err = theRouter.db.SaveUserUrls(context.Background(), userID, []string{urlToShort}, transaction)
+	err = theRouter.db.SaveUserUrls(ctx, userID, []string{urlToShort}, transaction)
 	if err != nil {
 		_ = theRouter.db.RollbackTransaction(transaction)
 
@@ -493,7 +493,7 @@ func (theRouter router) PostShorten(response http.ResponseWriter, request *http.
 		return
 	}
 
-	shortKey, err := theRouter.getShortKey(urlToShort, userID)
+	shortKey, err := theRouter.getShortKey(request.Context(), urlToShort, userID)
 	if err != nil && !errors.Is(err, ErrConflict) {
 		logger.Log.Debugln("error while `theRouter.getShortKey()` calling: ", zap.Error(err))
 		http.Error(response, err.Error(), http.StatusInternalServerError)

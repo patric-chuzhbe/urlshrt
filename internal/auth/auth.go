@@ -52,7 +52,7 @@ func (a *Auth) RegisterNewUser(h http.Handler) http.Handler {
 
 			return
 		}
-		userID, err := a.db.CreateUser(context.Background(), &user.User{}, nil)
+		userID, err := a.db.CreateUser(request.Context(), &user.User{}, nil)
 		if err != nil {
 			logger.Log.Debugln("Error calling the `a.db.createUser()`: ", zap.Error(err))
 			response.WriteHeader(http.StatusInternalServerError)
@@ -115,7 +115,7 @@ func (a *Auth) AuthenticateUser(h http.Handler) http.Handler {
 			return
 		}
 
-		usr, err := a.db.GetUserByID(context.Background(), userID, nil)
+		usr, err := a.db.GetUserByID(request.Context(), userID, nil)
 		if err != nil {
 			logger.Log.Debugln("Error calling the `a.db.GetUserByID()`: ", zap.Error(err))
 			response.WriteHeader(http.StatusInternalServerError)

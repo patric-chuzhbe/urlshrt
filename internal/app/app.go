@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 type userKeeper interface {
@@ -189,21 +190,32 @@ func New() (*App, error) {
 }
 
 func (a *App) Run() error {
-	// Handle SIGINT signal (Ctrl+C)
-	termCh := make(chan os.Signal, 1)
-	signal.Notify(termCh, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	logger.Log.Infoln("server running", "RunAddr", a.cfg.RunAddr)
 
+	server := &http.Server{
+		Addr:    a.cfg.RunAddr,
+		Handler: a.httpHandler,
+	}
+
 	serverErrCh := make(chan error, 1)
 	go func() {
-		serverErrCh <- http.ListenAndServe(a.cfg.RunAddr, a.httpHandler)
+		serverErrCh <- server.ListenAndServe()
 	}()
 
 	select {
-	case sig := <-termCh:
-		logger.Log.Infoln("Received signal:", sig, "Saving database and exiting...")
+	case <-ctx.Done():
+		logger.Log.Infoln("Received shutdown signal. Saving database and exiting...")
 		a.stopUrlsRemover()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("server shutdown error: %w", err)
+		}
+
 		return a.db.Close()
 
 	case err := <-serverErrCh:
