@@ -2,9 +2,10 @@ package urlsremover
 
 import (
 	"context"
+	"time"
+
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
-	"time"
 )
 
 type userUrlsKeeper interface {

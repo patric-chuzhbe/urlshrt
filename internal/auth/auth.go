@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
+
 	"github.com/golang-jwt/jwt/v4"
+	"go.uber.org/zap"
+
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
-	"go.uber.org/zap"
-	"net/http"
 )
 
 type userKeeper interface {

@@ -5,18 +5,20 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"regexp"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	"github.com/thoas/go-funk"
+	"go.uber.org/zap"
+
 	"github.com/patric-chuzhbe/urlshrt/internal/auth"
 	gzippedHttp "github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
-	"github.com/thoas/go-funk"
-	"go.uber.org/zap"
-	"io"
-	"net/http"
-	"regexp"
 )
 
 type authenticator interface {

@@ -1,10 +1,11 @@
 package logger
 
 import (
-	"go.uber.org/zap"
 	"net/http"
 	"os"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type responseData struct {

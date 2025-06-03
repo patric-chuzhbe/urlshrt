@@ -5,13 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/patric-chuzhbe/urlshrt/internal/models"
-	"github.com/patric-chuzhbe/urlshrt/internal/user"
-	"github.com/pressly/goose/v3"
-	"github.com/thoas/go-funk"
 	"strings"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+	"github.com/thoas/go-funk"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
+	"github.com/patric-chuzhbe/urlshrt/internal/user"
 )
 
 type PostgresDB struct {

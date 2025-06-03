@@ -2,12 +2,14 @@ package jsondb
 
 import (
 	"context"
-	"github.com/patric-chuzhbe/urlshrt/internal/models"
-	"github.com/patric-chuzhbe/urlshrt/internal/user"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/models"
+	"github.com/patric-chuzhbe/urlshrt/internal/user"
 )
 
 const (

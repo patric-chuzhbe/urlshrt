@@ -2,12 +2,13 @@ package config
 
 import (
 	"flag"
-	"github.com/caarlos0/env/v6"
-	"github.com/go-playground/validator/v10"
-	"github.com/joho/godotenv"
 	"log"
 	"os"
 	"time"
+
+	"github.com/caarlos0/env/v6"
+	"github.com/go-playground/validator/v10"
+	"github.com/joho/godotenv"
 )
 
 type Config struct {

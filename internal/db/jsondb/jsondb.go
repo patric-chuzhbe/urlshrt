@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+
 	"github.com/google/uuid"
+	"github.com/thoas/go-funk"
+
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
-	"github.com/thoas/go-funk"
-	"os"
 )
 
 type JSONDB struct {

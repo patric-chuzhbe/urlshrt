@@ -6,6 +6,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"go.uber.org/zap"
+
 	"github.com/patric-chuzhbe/urlshrt/internal/auth"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
 	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
@@ -16,12 +24,6 @@ import (
 	"github.com/patric-chuzhbe/urlshrt/internal/router"
 	"github.com/patric-chuzhbe/urlshrt/internal/urlsremover"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
-	"go.uber.org/zap"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 )
 
 type userKeeper interface {

@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/patric-chuzhbe/urlshrt/internal/app"
 	"log"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/app"
 )
 
 func main() {
