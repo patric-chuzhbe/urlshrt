@@ -95,11 +95,34 @@ type router struct {
 	db           storage
 	shortURLBase string
 	urlsRemover  urlsRemover
+	validator    *validator.Validate
 }
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
 
 var ErrConflict = errors.New("data conflict")
+
+func differenceStringSlices(a, b []string) []string {
+	bSet := make(map[string]struct{}, len(b))
+	for _, item := range b {
+		bSet[item] = struct{}{}
+	}
+
+	var diff []string
+	for _, item := range a {
+		if _, found := bSet[item]; !found {
+			diff = append(diff, item)
+		}
+	}
+	return diff
+}
+
+func (theRouter router) getValidator() *validator.Validate {
+	if theRouter.validator == nil {
+		theRouter.validator = validator.New()
+	}
+	return theRouter.validator
+}
 
 func (theRouter router) DeleteApiuserurls(response http.ResponseWriter, request *http.Request) {
 	userID, ok := request.Context().Value(auth.UserIDKey).(string)
@@ -256,8 +279,7 @@ func (theRouter router) PostApishortenbatch(response http.ResponseWriter, reques
 	}
 
 	existentFulls := funk.Keys(existentFullsToShortsMap).([]string)
-	unexistentFullsAsInterface, _ := funk.Difference(originalUrls, existentFulls)
-	unexistentFulls := unexistentFullsAsInterface.([]string)
+	unexistentFulls := differenceStringSlices(originalUrls, existentFulls)
 	unexistentFullsToShortsMap := theRouter.getUnexistentFullsToShortsMap(unexistentFulls)
 	err = theRouter.db.SaveNewFullsAndShorts(request.Context(), unexistentFullsToShortsMap, transaction)
 	if err != nil {

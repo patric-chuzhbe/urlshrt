@@ -129,6 +129,7 @@ func getStorageByType(cfg *config.Config) (storage, error) {
 			context.Background(),
 			cfg.DatabaseDSN,
 			cfg.DBConnectionTimeout,
+			cfg.MigrationsDir,
 		)
 
 	case models.StorageTypeFile:

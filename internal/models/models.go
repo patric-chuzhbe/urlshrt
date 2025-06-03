@@ -10,10 +10,12 @@ type ShortenResponse struct {
 	Result string `json:"result"`
 }
 
-type BatchShortenRequest []struct {
+type ShortenRequestItem struct {
 	CorrelationID string `json:"correlation_id" validate:"required"`
 	OriginalURL   string `json:"original_url" validate:"required,url"`
 }
+
+type BatchShortenRequest []ShortenRequestItem
 
 type BatchShortenResponseItem struct {
 	CorrelationID string `json:"correlation_id" validate:"required"`

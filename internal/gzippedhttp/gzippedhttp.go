@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 type CompressedReader struct {
@@ -41,7 +42,12 @@ type CompressedHTTPResponseWriter struct {
 }
 
 func (c *CompressedHTTPResponseWriter) Close() error {
-	return c.zw.Close()
+	err := c.zw.Close()
+	if err != nil {
+		return err
+	}
+	gzipWriterPool.Put(c.zw)
+	return nil
 }
 
 func (c *CompressedHTTPResponseWriter) WriteHeader(statusCode int) {
@@ -59,10 +65,19 @@ func (c *CompressedHTTPResponseWriter) Header() http.Header {
 	return c.w.Header()
 }
 
+var gzipWriterPool = sync.Pool{
+	New: func() interface{} {
+		w, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
+		return w
+	},
+}
+
 func NewCompressedHTTPResponseWriter(w http.ResponseWriter) *CompressedHTTPResponseWriter {
+	zw := gzipWriterPool.Get().(*gzip.Writer)
+	zw.Reset(w)
 	return &CompressedHTTPResponseWriter{
 		w:  w,
-		zw: gzip.NewWriter(w),
+		zw: zw,
 	}
 }
 
@@ -88,8 +103,7 @@ func UngzipJSONAndTextHTMLRequest(h http.Handler) http.Handler {
 	middleware := func(response http.ResponseWriter, request *http.Request) {
 		contentEncoding := request.Header.Get("Content-Encoding")
 		clientSendsGzippedData := strings.Contains(contentEncoding, "gzip")
-		// requestContentTypeIsJSONOrTextHTML := checkIfRequestContentTypeIsJSONOrTextHTML(request)
-		if clientSendsGzippedData /*&& requestContentTypeIsJSONOrTextHTML*/ {
+		if clientSendsGzippedData {
 			requestBodyWithCompression, err := NewCompressedReader(request.Body)
 			if err != nil {
 				response.WriteHeader(http.StatusInternalServerError)

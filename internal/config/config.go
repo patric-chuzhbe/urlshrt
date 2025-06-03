@@ -21,6 +21,7 @@ type Config struct {
 	AuthCookieSigningSecretKey string        `env:"AUTH_COOKIE_SIGNING_SECRET_KEY" envDefault:"LduYtmp2gWSRuyQyRHqbog=="`
 	ChannelCapacity            int           `env:"CHANNEL_CAPACITY" envDefault:"1024"`
 	DelayBetweenQueueFetches   time.Duration `env:"DELAY_BETWEEN_QUEUE_FETCHES" envDefault:"5s"`
+	MigrationsDir              string        `env:"MIGRATIONS_DIR" envDefault:"migrations"`
 }
 
 func validateFilePath(fieldLevel validator.FieldLevel) bool {

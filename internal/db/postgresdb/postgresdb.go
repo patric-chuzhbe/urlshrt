@@ -8,6 +8,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
+	"github.com/pressly/goose/v3"
 	"github.com/thoas/go-funk"
 	"strings"
 	"time"
@@ -25,6 +26,29 @@ type queryer interface {
 
 type executor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+func (db *PostgresDB) resetDB(ctx context.Context) error {
+	_, err := db.database.ExecContext(
+		ctx,
+		`
+			DO $$
+			DECLARE
+				r RECORD;
+			BEGIN
+				FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+					EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
+				END LOOP;
+			END $$;
+		`,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"in internal/db/postgresdb/postgresdb.go/resetDB(): error while `db.database.ExecContext()` calling: %w",
+			err,
+		)
+	}
+	return nil
 }
 
 func (db *PostgresDB) RemoveUsersUrls(
@@ -69,61 +93,29 @@ func (db *PostgresDB) RemoveUsersUrls(
 	return nil
 }
 
-func getUsersUrlsTableValues(userID string, urls []string) [][]string {
-	result := [][]string{}
-	for _, url := range urls {
-		result = append(result, []string{userID, url})
-	}
-
-	return result
-}
-
 func (db *PostgresDB) SaveUserUrls(
 	ctx context.Context,
 	userID string,
 	urls []string,
 	transaction *sql.Tx,
 ) error {
-	var database executor
-	if transaction == nil {
-		database = db.database
-	} else {
-		database = transaction
-	}
-	usersUrlsTableValues := getUsersUrlsTableValues(userID, urls)
-	if len(usersUrlsTableValues) == 0 {
-		return nil
-	}
-	usersUrlsTableValuesPlaceholders := make([]string, len(usersUrlsTableValues))
-	for i := range usersUrlsTableValuesPlaceholders {
-		usersUrlsTableValuesPlaceholders[i] = fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2)
-	}
-	usersUrlsTableValuesPlaceholdersAsString := strings.Join(usersUrlsTableValuesPlaceholders, ",")
-	queryParams := funk.Flatten(usersUrlsTableValues).([]string)
-	_, err := database.ExecContext(
-		ctx,
-		fmt.Sprintf(
+	for _, url := range urls {
+		_, err := transaction.ExecContext(
+			ctx,
 			`
 				INSERT INTO users_urls (user_id, url)
-					VALUES %s
+					VALUES ($1, $2)
 					ON CONFLICT (user_id, url) DO UPDATE
 					SET 
 						user_id = EXCLUDED.user_id, 
 						url = EXCLUDED.url;
 			`,
-			usersUrlsTableValuesPlaceholdersAsString,
-		),
-		func(strSlice []string) []interface{} {
-			result := make([]interface{}, len(strSlice))
-			for i, v := range strSlice {
-				result[i] = v
-			}
-
-			return result
-		}(queryParams)...,
-	)
-	if err != nil {
-		return err
+			userID,
+			url,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -464,86 +456,32 @@ func (db *PostgresDB) IsShortExists(ctx context.Context, short string) (bool, er
 	return shortCount > 0, nil
 }
 
-func (db *PostgresDB) createDBStructure(ctx context.Context) error {
-	_, err := db.database.ExecContext(
-		ctx,
-		`
-			CREATE TABLE short_to_full_url_map (
-			   "full"               VARCHAR(255)         NOT NULL,
-			   short                VARCHAR(255)         NOT NULL,
-			   is_deleted           BOOL                 NOT NULL DEFAULT FALSE,
-			   CONSTRAINT PK_SHORT_TO_FULL_URL_MAP PRIMARY KEY ("full")
-			);
-			
-			CREATE UNIQUE INDEX uq_short ON short_to_full_url_map (short);
-			
-			CREATE TABLE USERS (
-			   id UUID NOT NULL DEFAULT gen_random_uuid(),
-			   CONSTRAINT PK_USERS PRIMARY KEY (id)
-			);
-			
-			CREATE TABLE users_urls (
-			   user_id              UUID                 NOT NULL,
-			   url                  VARCHAR(255)         NOT NULL,
-			   CONSTRAINT PK_USERS_URLS PRIMARY KEY (user_id, url)
-			);
-			
-			ALTER TABLE users_urls
-			   ADD CONSTRAINT FK_USERS_UR_REFERENCE_USERS FOREIGN KEY (user_id)
-				  REFERENCES users (id)
-				  ON DELETE CASCADE ON UPDATE CASCADE;
-			
-			ALTER TABLE users_urls
-			   ADD CONSTRAINT FK_USERS_UR_REFERENCE_SHORT_TO FOREIGN KEY (url)
-				  REFERENCES short_to_full_url_map ("full")
-				  ON DELETE CASCADE ON UPDATE CASCADE;
-		`,
-	)
-	if err != nil {
-		return err
-	}
+type InitOption func(*initOptions)
 
-	return nil
+type initOptions struct {
+	DBPreReset bool
 }
 
-func (db *PostgresDB) checkDBStructure(ctx context.Context) (bool, error) {
-	row := db.database.QueryRowContext(
-		ctx,
-		`
-			SELECT COUNT(*)
-				FROM pg_tables 
-				WHERE schemaname = 'public' AND tablename = 'short_to_full_url_map'
-		`,
-	)
-	var tableCount int
-	err := row.Scan(&tableCount)
-	if err != nil {
-		return false, err
+func WithDBPreReset(value bool) InitOption {
+	return func(options *initOptions) {
+		options.DBPreReset = value
 	}
-
-	return tableCount > 0, nil
-}
-
-func (db *PostgresDB) checkOrCreateDBStructure(ctx context.Context) error {
-	isDBStructureOk, err := db.checkDBStructure(ctx)
-	if err != nil {
-		return err
-	}
-	if !isDBStructureOk {
-		err := db.createDBStructure(ctx)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func New(
 	ctx context.Context,
 	databaseDSN string,
 	connectionTimeout time.Duration,
+	migrationsDir string,
+	optionsProto ...InitOption,
 ) (*PostgresDB, error) {
+	options := &initOptions{
+		DBPreReset: false,
+	}
+	for _, protoOption := range optionsProto {
+		protoOption(options)
+	}
+
 	database, err := sql.Open("pgx", databaseDSN)
 	if err != nil {
 		return nil, err
@@ -554,9 +492,30 @@ func New(
 		connectionTimeout: connectionTimeout,
 	}
 
-	err = result.checkOrCreateDBStructure(ctx)
-	if err != nil {
-		return nil, err
+	if options.DBPreReset {
+		if err := result.resetDB(ctx); err != nil {
+			return nil,
+				fmt.Errorf(
+					"in internal/db/postgresdb/postgresdb.go/New(): error while `result.resetDB()` calling: %w",
+					err,
+				)
+		}
+	}
+
+	if err := goose.SetDialect("postgres"); err != nil {
+		return nil,
+			fmt.Errorf(
+				"in internal/db/postgresdb/postgresdb.go/New(): error while `goose.SetDialect()` calling: %w",
+				err,
+			)
+	}
+
+	if err := goose.Up(result.database, migrationsDir); err != nil {
+		return nil,
+			fmt.Errorf(
+				"in internal/db/postgresdb/postgresdb.go/New(): error while `goose.Up()` calling: %w",
+				err,
+			)
 	}
 
 	return result, nil
