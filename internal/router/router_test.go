@@ -20,16 +20,18 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	resty "github.com/go-resty/resty/v2"
+	"github.com/go-resty/resty/v2"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/postgresdb"
+	"github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/patric-chuzhbe/urlshrt/internal/auth"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
 	"github.com/patric-chuzhbe/urlshrt/internal/db/memorystorage"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/postgresdb"
-	"github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
 	"github.com/patric-chuzhbe/urlshrt/internal/logger"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
@@ -46,6 +48,12 @@ type testStorage interface {
 	CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (string, error)
 	GetUserByID(ctx context.Context, userID string, transaction *sql.Tx) (*user.User, error)
 	Close() error
+}
+
+type initOption func(*initOptions)
+
+type initOptions struct {
+	mockAuth bool
 }
 
 func getPostApishortenbatchRequest(amountOfURLs int) models.BatchShortenRequest {
@@ -127,7 +135,7 @@ func TestPostApishortenForGzip(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	myRouter := router{
+	myRouter := Router{
 		db:           db,
 		shortURLBase: cfg.ShortURLBase,
 	}
@@ -286,7 +294,7 @@ func TestPostApishorten(t *testing.T) {
 		authCookieSigningSecretKey,
 	)
 
-	myRouter := router{
+	myRouter := Router{
 		db:           theDB,
 		shortURLBase: cfg.ShortURLBase,
 	}
@@ -445,7 +453,7 @@ eshche odna stroka
 				require.NoError(t, err)
 			}()
 
-			myRouter := router{
+			myRouter := Router{
 				db:           theDB,
 				shortURLBase: cfg.ShortURLBase,
 			}
@@ -527,7 +535,7 @@ func BenchmarkPostApishortenbatch(b *testing.B) {
 	cfg, err := config.New(config.WithDisableFlagsParsing(true))
 	require.NoError(b, err)
 
-	var db testStorage /*storage*/
+	var db testStorage
 	if databaseDSN != "" {
 		db, err = postgresdb.New(
 			context.Background(),
@@ -584,17 +592,40 @@ func BenchmarkPostApishortenbatch(b *testing.B) {
 	}
 }
 
-func setupTestRouter(t *testing.T) (*httptest.Server, storage) {
+func withMockAuth(value bool) initOption {
+	return func(options *initOptions) {
+		options.mockAuth = value
+	}
+}
+
+func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server, testStorage, *chi.Mux) {
+	options := &initOptions{}
+	for _, protoOption := range optionsProto {
+		protoOption(options)
+	}
+
 	cfg, err := config.New(config.WithDisableFlagsParsing(true))
-	require.NoError(t, err)
+	if t != nil {
+		require.NoError(t, err)
+	}
 
 	db, err := memorystorage.New()
-	require.NoError(t, err)
+	if t != nil {
+		require.NoError(t, err)
+	}
 
 	authKey, err := base64.URLEncoding.DecodeString(cfg.AuthCookieSigningSecretKey)
-	require.NoError(t, err)
+	if t != nil {
+		require.NoError(t, err)
+	}
 
-	authMiddleware := auth.New(db, cfg.AuthCookieName, authKey)
+	var authMiddleware authenticator
+
+	if options.mockAuth {
+		authMiddleware = &mockAuth{}
+	} else {
+		authMiddleware = auth.New(db, cfg.AuthCookieName, authKey)
+	}
 
 	theRouter := New(
 		db,
@@ -604,13 +635,15 @@ func setupTestRouter(t *testing.T) (*httptest.Server, storage) {
 	)
 
 	err = logger.Init("debug")
-	require.NoError(t, err)
+	if t != nil {
+		require.NoError(t, err)
+	}
 
-	return httptest.NewServer(theRouter), db
+	return httptest.NewServer(theRouter), db, theRouter
 }
 
 func TestPostApishortenbatch(t *testing.T) {
-	server, db := setupTestRouter(t)
+	server, db, _ := setupTestRouter(t)
 	defer server.Close()
 
 	type requestItem struct {
