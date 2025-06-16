@@ -477,4 +477,4 @@ jobs:
           github.head_ref == 'iter24'
         run: |
           shortenertestbeta -test.v -test.run=^TestIteration18$ \
-              -source-path=. \
+              -source-path=.

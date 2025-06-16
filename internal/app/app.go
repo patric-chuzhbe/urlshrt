@@ -1,5 +1,5 @@
 // Package app initializes and runs the main application service.
-// It configures logging, storage, authentication, and routing,
+// It configures logging, Storage, authentication, and routing,
 // and handles graceful shutdown.
 package app
 
@@ -30,18 +30,28 @@ import (
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 )
 
-type userKeeper interface {
+// UserKeeper is an interface for handling user-related operations
+// such as creating and retrieving users.
+type UserKeeper interface {
+	// CreateUser generates a new user ID, stores the user, and returns the ID.
 	CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (string, error)
+
+	// GetUserByID retrieves a user by their ID. If not found, returns a user with an empty ID.
 	GetUserByID(ctx context.Context, userID string, transaction *sql.Tx) (*user.User, error)
 }
 
-type userUrlsKeeper interface {
+// UserUrlsKeeper is an interface that defines methods for managing URLs associated with users.
+type UserUrlsKeeper interface {
+	// GetUserUrls retrieves all short-to-full URL mappings for a given user.
+	// Optionally applies a formatter to each short URL before returning.
 	GetUserUrls(
 		ctx context.Context,
 		userID string,
-		shortURLFormatter func(string) string,
+		shortURLFormatter models.URLFormatter, /*func(string) string*/
 	) (models.UserUrls, error)
 
+	// SaveUserUrls stores mappings between a user and a list of full URLs.
+	// It uses an UPSERT strategy and runs within an existing transaction.
 	SaveUserUrls(
 		ctx context.Context,
 		userID string,
@@ -49,41 +59,52 @@ type userUrlsKeeper interface {
 		transaction *sql.Tx,
 	) error
 
+	// RemoveUsersUrls removes URLs for a given user.
 	RemoveUsersUrls(
 		ctx context.Context,
 		usersURLs map[string][]string,
 	) error
 }
 
-type transactioner interface {
+// Transactioner defines methods for handling database transactions.
+type Transactioner interface {
+	// BeginTransaction starts a new transaction and returns it.
 	BeginTransaction() (*sql.Tx, error)
 
+	// RollbackTransaction rolls back the given transaction.
 	RollbackTransaction(transaction *sql.Tx) error
 
+	// CommitTransaction commits the given transaction.
 	CommitTransaction(transaction *sql.Tx) error
 }
 
-type urlsMapper interface {
+// URLsMapper is an interface for mapping between full URLs and short URLs.
+type URLsMapper interface {
+	// FindShortsByFulls retrieves all known short URLs for the given list of full URLs.
 	FindShortsByFulls(
 		ctx context.Context,
 		originalUrls []string,
 		transaction *sql.Tx,
 	) (map[string]string, error)
 
+	// SaveNewFullsAndShorts stores new full-to-short URL mappings.
 	SaveNewFullsAndShorts(
 		ctx context.Context,
 		unexistentFullsToShortsMap map[string]string,
 		transaction *sql.Tx,
 	) error
 
+	// FindFullByShort retrieves the full URL associated with the given short URL.
 	FindFullByShort(ctx context.Context, short string) (string, bool, error)
 
+	// FindShortByFull retrieves the short URL associated with the given full URL.
 	FindShortByFull(
 		ctx context.Context,
 		full string,
 		transaction *sql.Tx,
 	) (string, bool, error)
 
+	// InsertURLMapping stores a mapping from short to full URL.
 	InsertURLMapping(
 		ctx context.Context,
 		short,
@@ -92,33 +113,50 @@ type urlsMapper interface {
 	) error
 }
 
-type pinger interface {
+// Pinger is an interface for pinging a storage to check its health.
+type Pinger interface {
+	// Ping checks the storage's health.
 	Ping(ctx context.Context) error
 }
 
-type storage interface {
-	userKeeper
-	userUrlsKeeper
-	transactioner
-	urlsMapper
-	pinger
+// Storage defines the interface for interacting with user data, URLs, and transactions.
+// It includes methods for managing users, URLs, transactions, and health checks.
+type Storage interface {
+	UserKeeper
+	UserUrlsKeeper
+	Transactioner
+	URLsMapper
+	Pinger
 	Close() error
 }
 
-// App encapsulates the configuration, HTTP handler, storage backend,
+// Remover is an interface for handling background URL deletion jobs.
+type Remover interface {
+	// ListenErrors listens for errors and passes them to the provided callback function.
+	ListenErrors(callback func(error))
+
+	// Run starts the background job processing.
+	Run(ctx context.Context)
+
+	// EnqueueJob adds a new job to the queue.
+	EnqueueJob(job *models.URLDeleteJob)
+}
+
+// App encapsulates the configuration, HTTP handler, Storage backend,
 // and background services (such as URL remover) needed to run the URL shortener service.
 type App struct {
 	cfg             *config.Config
-	db              storage
-	urlsRemover     *urlsremover.URLsRemover
+	db              Storage
+	urlsRemover     Remover /* *urlsremover.URLsRemover */
 	stopUrlsRemover context.CancelFunc
 	httpHandler     http.Handler
+	server          *http.Server
 }
 
 // New initializes a new instance of App by:
 // - loading configuration
 // - initializing logger
-// - selecting and setting up storage
+// - selecting and setting up Storage
 // - setting up the background URL remover
 // - setting up the router and middleware
 func New() (*App, error) {
@@ -169,6 +207,11 @@ func New() (*App, error) {
 		app.urlsRemover,
 	)
 
+	app.server = &http.Server{
+		Addr:    app.cfg.RunAddr,
+		Handler: app.httpHandler,
+	}
+
 	return app, nil
 }
 
@@ -180,14 +223,14 @@ func (a *App) Run() error {
 
 	logger.Log.Infoln("server running", "RunAddr", a.cfg.RunAddr)
 
-	server := &http.Server{
-		Addr:    a.cfg.RunAddr,
-		Handler: a.httpHandler,
-	}
+	//a.server := &http.Server{
+	//	Addr:    a.cfg.RunAddr,
+	//	Handler: a.httpHandler,
+	//}
 
 	serverErrCh := make(chan error, 1)
 	go func() {
-		serverErrCh <- server.ListenAndServe()
+		serverErrCh <- a.server.ListenAndServe()
 	}()
 
 	select {
@@ -197,7 +240,7 @@ func (a *App) Run() error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		if err := a.server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("server shutdown error: %w", err)
 		}
 
@@ -227,10 +270,10 @@ func getAvailableStorageType(cfg *config.Config) int {
 	return models.StorageTypeMemory
 }
 
-func getStorageByType(cfg *config.Config) (storage, error) {
+func getStorageByType(cfg *config.Config) (Storage, error) {
 	switch getAvailableStorageType(cfg) {
 	case models.StorageTypeUnknown:
-		return nil, errors.New("unknown storage type")
+		return nil, errors.New("unknown Storage type")
 
 	case models.StorageTypePostgresql:
 		return postgresdb.New(

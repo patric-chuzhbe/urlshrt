@@ -1,19 +1,176 @@
-package router
+package examples
 
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/stretchr/testify/require"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/config"
+	"github.com/patric-chuzhbe/urlshrt/internal/db/memorystorage"
+	"github.com/patric-chuzhbe/urlshrt/internal/logger"
+	"github.com/patric-chuzhbe/urlshrt/internal/router"
 
 	"github.com/patric-chuzhbe/urlshrt/internal/auth"
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
 )
+
+type authenticator interface {
+	AuthenticateUser(h http.Handler) http.Handler
+	RegisterNewUser(h http.Handler) http.Handler
+}
+
+type userUrlsKeeper interface {
+	GetUserUrls(
+		ctx context.Context,
+		userID string,
+		shortURLFormatter models.URLFormatter, /*func(string) string*/
+	) (models.UserUrls, error)
+
+	SaveUserUrls(
+		ctx context.Context,
+		userID string,
+		urls []string,
+		transaction *sql.Tx,
+	) error
+}
+
+type transactioner interface {
+	BeginTransaction() (*sql.Tx, error)
+
+	RollbackTransaction(transaction *sql.Tx) error
+
+	CommitTransaction(transaction *sql.Tx) error
+}
+
+type urlsMapper interface {
+	FindShortsByFulls(
+		ctx context.Context,
+		originalUrls []string,
+		transaction *sql.Tx,
+	) (map[string]string, error)
+
+	SaveNewFullsAndShorts(
+		ctx context.Context,
+		unexistentFullsToShortsMap map[string]string,
+		transaction *sql.Tx,
+	) error
+
+	FindFullByShort(ctx context.Context, short string) (string, bool, error)
+
+	FindShortByFull(
+		ctx context.Context,
+		full string,
+		transaction *sql.Tx,
+	) (string, bool, error)
+
+	InsertURLMapping(
+		ctx context.Context,
+		short,
+		full string,
+		transaction *sql.Tx,
+	) error
+}
+
+type pinger interface {
+	Ping(ctx context.Context) error
+}
+
+type testStorage interface {
+	userUrlsKeeper
+	transactioner
+	urlsMapper
+	pinger
+	CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (string, error)
+	GetUserByID(ctx context.Context, userID string, transaction *sql.Tx) (*user.User, error)
+	Close() error
+}
+
+type initOptions struct {
+	mockAuth bool
+}
+
+type initOption func(*initOptions)
+
+type mockUrlsRemover struct{}
+
+func getPostApishortenbatchRequest(amountOfURLs int) models.BatchShortenRequest {
+	result := models.BatchShortenRequest{}
+	for i := 0; i < amountOfURLs; i++ {
+		result = append(
+			result,
+			models.ShortenRequestItem{
+				CorrelationID: strconv.Itoa(i + 1),
+				OriginalURL:   fmt.Sprintf("https://example.com/%d", i+1),
+			},
+		)
+	}
+	return result
+}
+
+func withMockAuth(value bool) initOption {
+	return func(options *initOptions) {
+		options.mockAuth = value
+	}
+}
+
+func (m *mockUrlsRemover) EnqueueJob(job *models.URLDeleteJob) {}
+
+func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server, testStorage, *chi.Mux) {
+	options := &initOptions{}
+	for _, protoOption := range optionsProto {
+		protoOption(options)
+	}
+
+	cfg, err := config.New(config.WithDisableFlagsParsing(true))
+	if t != nil {
+		require.NoError(t, err)
+	}
+
+	db, err := memorystorage.New()
+	if t != nil {
+		require.NoError(t, err)
+	}
+
+	authKey, err := base64.URLEncoding.DecodeString(cfg.AuthCookieSigningSecretKey)
+	if t != nil {
+		require.NoError(t, err)
+	}
+
+	var authMiddleware authenticator
+
+	if options.mockAuth {
+		authMiddleware = &mockAuth{}
+	} else {
+		authMiddleware = auth.New(db, cfg.AuthCookieName, authKey)
+	}
+
+	theRouter := router.New(
+		db,
+		cfg.ShortURLBase,
+		authMiddleware,
+		&mockUrlsRemover{},
+	)
+
+	err = logger.Init("debug")
+	if t != nil {
+		require.NoError(t, err)
+	}
+
+	return httptest.NewServer(theRouter), db, theRouter
+}
 
 type mockAuth struct{}
 

@@ -35,7 +35,7 @@ type userUrlsKeeper interface {
 	GetUserUrls(
 		ctx context.Context,
 		userID string,
-		shortURLFormatter func(string) string,
+		shortURLFormatter models.URLFormatter, /*func(string) string*/
 	) (models.UserUrls, error)
 
 	SaveUserUrls(

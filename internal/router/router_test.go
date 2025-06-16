@@ -50,6 +50,16 @@ type testStorage interface {
 	Close() error
 }
 
+type mockAuth struct{}
+
+func (m *mockAuth) AuthenticateUser(h http.Handler) http.Handler {
+	return h
+}
+
+func (m *mockAuth) RegisterNewUser(h http.Handler) http.Handler {
+	return h
+}
+
 type initOption func(*initOptions)
 
 type initOptions struct {

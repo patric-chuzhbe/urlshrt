@@ -67,3 +67,8 @@ type URLDeleteJob struct {
 	UserID       string            // ID of the user initiating deletion
 	URLsToDelete DeleteURLsRequest // URLs to be deleted
 }
+
+// URLFormatter defines a function type that takes a string URL as input
+// and returns a modified string. It is typically used to apply formatting
+// to short URLs before presenting them to the user (e.g., prefixing with a base URL).
+type URLFormatter func(string) string

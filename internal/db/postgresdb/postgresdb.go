@@ -8,16 +8,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/pressly/goose/v3"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/thoas/go-funk"
 
 	"github.com/patric-chuzhbe/urlshrt/internal/models"
 	"github.com/patric-chuzhbe/urlshrt/internal/user"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/db/postgresdb/sqlc"
 )
 
 // PostgresDB is a PostgreSQL-backed implementation of a URL shortener storage.
@@ -25,15 +27,7 @@ import (
 type PostgresDB struct {
 	database          *sql.DB
 	connectionTimeout time.Duration
-}
-
-type queryer interface {
-	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-type executor interface {
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	queries           *sqlc.Queries
 }
 
 type initOptions struct {
@@ -65,6 +59,7 @@ func New(
 	result := &PostgresDB{
 		database:          database,
 		connectionTimeout: connectionTimeout,
+		queries:           sqlc.New(database),
 	}
 
 	if options.DBPreReset {
@@ -107,21 +102,18 @@ func (db *PostgresDB) RemoveUsersUrls(
 		return err
 	}
 
-	for userID, URLs := range usersURLs {
-		for _, URL := range URLs {
-			_, err := transaction.ExecContext(
-				ctx,
-				`
-					UPDATE short_to_full_url_map
-						SET is_deleted = true
-						FROM users_urls
-						WHERE short_to_full_url_map.full = users_urls.url
-							AND users_urls.user_id = $1
-							AND short_to_full_url_map.short = $2
-				`,
-				userID,
-				URL,
-			)
+	qtx := db.queries.WithTx(transaction)
+
+	for userID, urls := range usersURLs {
+		for _, url := range urls {
+			userIDAsUUID, err := uuid.Parse(userID)
+			if err != nil {
+				return err
+			}
+			err = qtx.RemoveUsersUrls(ctx, sqlc.RemoveUsersUrlsParams{
+				UserID:   userIDAsUUID, /* userID*/
+				ShortUrl: url,
+			})
 			if err != nil {
 				err2 := transaction.Rollback()
 				if err2 != nil {
@@ -129,6 +121,10 @@ func (db *PostgresDB) RemoveUsersUrls(
 				}
 				return err
 			}
+			//if err != nil {
+			//	tx.Rollback()
+			//	return err
+			//}
 		}
 	}
 
@@ -148,20 +144,17 @@ func (db *PostgresDB) SaveUserUrls(
 	urls []string,
 	transaction *sql.Tx,
 ) error {
+	qtx := db.queries.WithTx(transaction)
+
 	for _, url := range urls {
-		_, err := transaction.ExecContext(
-			ctx,
-			`
-				INSERT INTO users_urls (user_id, url)
-					VALUES ($1, $2)
-					ON CONFLICT (user_id, url) DO UPDATE
-					SET 
-						user_id = EXCLUDED.user_id, 
-						url = EXCLUDED.url;
-			`,
-			userID,
-			url,
-		)
+		userIDAsUUID, err := uuid.Parse(userID)
+		if err != nil {
+			return err
+		}
+		err = qtx.SaveUserUrl(ctx, sqlc.SaveUserUrlParams{
+			UserID: userIDAsUUID, /* userID*/
+			Url:    url,
+		})
 		if err != nil {
 			return err
 		}
@@ -175,48 +168,29 @@ func (db *PostgresDB) SaveUserUrls(
 func (db *PostgresDB) GetUserUrls(
 	ctx context.Context,
 	userID string,
-	shortURLFormatter func(string) string,
+	shortURLFormatter models.URLFormatter, /*func(string) string*/
 ) (models.UserUrls, error) {
 	formatter := func(str string) string { return str }
 	if shortURLFormatter != nil {
 		formatter = shortURLFormatter
 	}
 
-	rows, err := db.database.QueryContext(
-		ctx,
-		`
-			SELECT short_to_full_url_map.full, short_to_full_url_map.short 
-				FROM short_to_full_url_map
-					JOIN users_urls ON users_urls.url = short_to_full_url_map.full
-						AND users_urls.user_id = $1
-		`,
-		userID,
-	)
+	userIDAsUUID, err := uuid.Parse(userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	rows, err := db.queries.GetUserUrls(ctx, userIDAsUUID)
+	if err != nil {
+		return nil, err
+	}
 
 	result := models.UserUrls{}
-	for rows.Next() {
-		var short, full string
-		err = rows.Scan(&full, &short)
-		if err != nil {
-			return nil, err
-		}
-
-		result = append(
-			result,
-			models.UserURL{
-				ShortURL:    formatter(short),
-				OriginalURL: full,
-			},
-		)
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return nil, err
+	for _, row := range rows {
+		result = append(result, models.UserURL{
+			ShortURL:    formatter(row.Short),
+			OriginalURL: row.OriginalUrl,
+		})
 	}
 
 	return result, nil
@@ -225,48 +199,41 @@ func (db *PostgresDB) GetUserUrls(
 // CreateUser inserts a new user record into the database.
 // Returns the created user ID or an error if insertion fails.
 func (db *PostgresDB) CreateUser(ctx context.Context, usr *user.User, transaction *sql.Tx) (string, error) {
-	var database queryer
-	if transaction == nil {
-		database = db.database
+	var queries *sqlc.Queries
+	if transaction != nil {
+		queries = db.queries.WithTx(transaction)
 	} else {
-		database = transaction
+		queries = db.queries
 	}
 
-	row := database.QueryRowContext(
-		ctx,
-		`INSERT INTO users DEFAULT VALUES RETURNING id`,
-	)
-	var userIDFromDB string
-	err := row.Scan(&userIDFromDB)
+	userID, err := queries.CreateUser(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	return userIDFromDB, nil
+	return userID.String(), nil
 }
 
 // GetUserByID fetches a user by their UUID from the database.
 // If the user does not exist, it returns a user with an empty ID field.
 func (db *PostgresDB) GetUserByID(ctx context.Context, userID string, transaction *sql.Tx) (*user.User, error) {
-	var database queryer
-
-	if transaction == nil {
-		database = db.database
-	} else {
-		database = transaction
-	}
-
 	if userID == "" {
 		return &user.User{ID: ""}, nil
 	}
 
-	row := database.QueryRowContext(
-		ctx,
-		`SELECT id FROM users WHERE id = $1`,
-		userID,
-	)
-	var userIDFromDB string
-	err := row.Scan(&userIDFromDB)
+	var queries *sqlc.Queries
+	if transaction != nil {
+		queries = db.queries.WithTx(transaction)
+	} else {
+		queries = db.queries
+	}
+
+	userIDAsUUID, err := uuid.Parse(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	userIDFromDB, err := queries.GetUserByID(ctx, userIDAsUUID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return &user.User{ID: ""}, nil
@@ -274,7 +241,7 @@ func (db *PostgresDB) GetUserByID(ctx context.Context, userID string, transactio
 		return &user.User{ID: ""}, err
 	}
 
-	return &user.User{ID: userIDFromDB}, nil
+	return &user.User{ID: userIDFromDB.String()}, nil
 }
 
 // CommitTransaction commits the given SQL transaction.
@@ -309,42 +276,25 @@ func (db *PostgresDB) SaveNewFullsAndShorts(
 	newURLs map[string]string,
 	transaction *sql.Tx,
 ) error {
-	shortToFullURLMapTableValues := prepareURLMapping(newURLs)
-	shortToFullURLMapTableValuesLen := len(shortToFullURLMapTableValues)
-	if shortToFullURLMapTableValuesLen == 0 {
+	if len(newURLs) == 0 {
 		return nil
 	}
-	shortToFullURLMapTableValuesPlaceholders := make([]string, len(shortToFullURLMapTableValues))
-	for i := range shortToFullURLMapTableValuesPlaceholders {
-		shortToFullURLMapTableValuesPlaceholders[i] = fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2)
-	}
-	shortToFullURLMapTableValuesPlaceholdersAsString := strings.Join(shortToFullURLMapTableValuesPlaceholders, ",")
-	queryParams := funk.Flatten(shortToFullURLMapTableValues).([]string)
 
-	var database executor
-	if transaction == nil {
-		database = db.database
+	var queries *sqlc.Queries
+	if transaction != nil {
+		queries = db.queries.WithTx(transaction)
 	} else {
-		database = transaction
+		queries = db.queries
 	}
 
-	_, err := database.ExecContext(
-		ctx,
-		fmt.Sprintf(
-			`INSERT INTO short_to_full_url_map ("short", "full") VALUES %s`,
-			shortToFullURLMapTableValuesPlaceholdersAsString,
-		),
-		func(strSlice []string) []interface{} {
-			result := make([]interface{}, len(strSlice))
-			for i, v := range strSlice {
-				result[i] = v
-			}
-
-			return result
-		}(queryParams)...,
-	)
-	if err != nil {
-		return err
+	for full, short := range newURLs {
+		err := queries.SaveURLMapping(ctx, sqlc.SaveURLMappingParams{
+			Short:       short,
+			OriginalUrl: full,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -357,58 +307,25 @@ func (db *PostgresDB) FindShortsByFulls(
 	urls []string,
 	transaction *sql.Tx,
 ) (map[string]string, error) {
-	originalUrlsLen := len(urls)
-	if originalUrlsLen == 0 {
+	if len(urls) == 0 {
 		return map[string]string{}, nil
 	}
-	originalUrlsPlaceholdersSlice := make([]string, originalUrlsLen)
-	for i := range urls {
-		originalUrlsPlaceholdersSlice[i] = fmt.Sprintf("$%d", i+1)
-	}
-	originalUrlsPlaceholders := strings.Join(originalUrlsPlaceholdersSlice, ",")
 
-	var database queryer
-
-	if transaction == nil {
-		database = db.database
+	var queries *sqlc.Queries
+	if transaction != nil {
+		queries = db.queries.WithTx(transaction)
 	} else {
-		database = transaction
+		queries = db.queries
 	}
 
-	rows, err := database.QueryContext(
-		ctx,
-		fmt.Sprintf(
-			`SELECT "short", "full" FROM short_to_full_url_map WHERE "full" IN (%s)`,
-			originalUrlsPlaceholders,
-		),
-		func(strSlice []string) []interface{} {
-			result := make([]interface{}, len(strSlice))
-			for i, v := range strSlice {
-				result[i] = v
-			}
-
-			return result
-		}(urls)...,
-	)
+	rows, err := queries.FindShortsByFulls(ctx, urls)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	result := map[string]string{}
-	for rows.Next() {
-		var short, full string
-		err = rows.Scan(&short, &full)
-		if err != nil {
-			return nil, err
-		}
-
-		result[full] = short
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return nil, err
+	result := make(map[string]string, len(rows))
+	for _, row := range rows {
+		result[row.OriginalUrl] = row.Short
 	}
 
 	return result, nil
@@ -421,38 +338,25 @@ func (db *PostgresDB) InsertURLMapping(
 	full string,
 	transaction *sql.Tx,
 ) error {
-	var database executor
-
-	if transaction == nil {
-		database = db.database
+	var queries *sqlc.Queries
+	if transaction != nil {
+		queries = db.queries.WithTx(transaction)
 	} else {
-		database = transaction
+		queries = db.queries
 	}
 
-	_, err := database.ExecContext(
-		ctx,
-		`INSERT INTO short_to_full_url_map ("short", "full") VALUES ($1, $2)`,
-		short,
-		full,
-	)
-	if err != nil {
-		return err
-	}
+	err := queries.InsertURLMapping(ctx, sqlc.InsertURLMappingParams{
+		Short:       short,
+		OriginalUrl: full,
+	})
 
-	return nil
+	return err
 }
 
 // FindFullByShort retrieves the full URL associated with the given short URL.
 // If the short URL is marked as deleted, it returns true and an error.
 func (db *PostgresDB) FindFullByShort(ctx context.Context, short string) (string, bool, error) {
-	row := db.database.QueryRowContext(
-		ctx,
-		`SELECT "full", is_deleted FROM short_to_full_url_map WHERE "short" = $1`,
-		short,
-	)
-	var full string
-	var isDeleted bool
-	err := row.Scan(&full, &isDeleted)
+	row, err := db.queries.FindFullByShort(ctx, short)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", false, nil
@@ -460,11 +364,11 @@ func (db *PostgresDB) FindFullByShort(ctx context.Context, short string) (string
 		return "", false, err
 	}
 
-	if isDeleted {
-		return full, true, models.ErrURLMarkedAsDeleted
+	if row.IsDeleted {
+		return row.OriginalUrl, true, models.ErrURLMarkedAsDeleted
 	}
 
-	return full, true, nil
+	return row.OriginalUrl, true, nil
 }
 
 // FindShortByFull retrieves the short URL corresponding to the given full URL.
@@ -474,21 +378,14 @@ func (db *PostgresDB) FindShortByFull(
 	full string,
 	transaction *sql.Tx,
 ) (string, bool, error) {
-	var database queryer
-
-	if transaction == nil {
-		database = db.database
+	var queries *sqlc.Queries
+	if transaction != nil {
+		queries = db.queries.WithTx(transaction)
 	} else {
-		database = transaction
+		queries = db.queries
 	}
 
-	row := database.QueryRowContext(
-		ctx,
-		`SELECT "short" FROM short_to_full_url_map WHERE "full" = $1`,
-		full,
-	)
-	var short string
-	err := row.Scan(&short)
+	short, err := queries.FindShortByFull(ctx, full)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", false, nil
@@ -501,22 +398,7 @@ func (db *PostgresDB) FindShortByFull(
 
 // IsShortExists checks if the specified short URL exists in the database.
 func (db *PostgresDB) IsShortExists(ctx context.Context, short string) (bool, error) {
-	row := db.database.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM short_to_full_url_map WHERE "short" = $1`,
-		short,
-	)
-	var shortCount int
-	err := row.Scan(&shortCount)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	return shortCount > 0, nil
+	return db.queries.IsShortExists(ctx, short)
 }
 
 // InitOption defines a functional option for configuring database initialization.
@@ -549,33 +431,13 @@ func (db *PostgresDB) Close() error {
 }
 
 func (db *PostgresDB) resetDB(ctx context.Context) error {
-	_, err := db.database.ExecContext(
-		ctx,
-		`
-			DO $$
-			DECLARE
-				r RECORD;
-			BEGIN
-				FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-					EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
-				END LOOP;
-			END $$;
-		`,
-	)
+	err := db.queries.ResetDB(ctx)
 	if err != nil {
 		return fmt.Errorf(
-			"in internal/db/postgresdb/postgresdb.go/resetDB(): error while `db.database.ExecContext()` calling: %w",
+			"in internal/db/postgresdb/postgresdb.go/resetDB(): error while db.queries.ResetDB() calling: %w",
 			err,
 		)
 	}
+
 	return nil
-}
-
-func prepareURLMapping(newURLs map[string]string) [][]string {
-	result := [][]string{}
-	for full, short := range newURLs {
-		result = append(result, []string{short, full})
-	}
-
-	return result
 }

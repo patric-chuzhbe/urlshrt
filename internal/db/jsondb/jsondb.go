@@ -106,7 +106,7 @@ func (db *JSONDB) SaveUserUrls(
 func (db *JSONDB) GetUserUrls(
 	ctx context.Context,
 	userID string,
-	shortURLFormatter func(string) string,
+	shortURLFormatter models.URLFormatter, /*func(string) string*/
 ) (models.UserUrls, error) {
 	formatter := func(str string) string { return str }
 	if shortURLFormatter != nil {
