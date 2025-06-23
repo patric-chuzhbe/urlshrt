@@ -3,6 +3,7 @@
 package logger
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"time"
@@ -63,7 +64,7 @@ func Init(level string) error {
 // Sync flushes any buffered log entries to the output.
 // It should be called when shutting down to ensure all logs are written.
 func Sync() error {
-	if err := Log.Sync(); err != nil && err != os.ErrInvalid {
+	if err := Log.Sync(); err != nil && !errors.Is(err, os.ErrInvalid) {
 		return err
 	}
 

@@ -6,6 +6,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -46,6 +47,8 @@ type ContextKey string
 
 // UserIDKey is the context key used to store and retrieve the authenticated user's ID.
 const UserIDKey ContextKey = "userID"
+
+var errInvalidTokenOrJwtParsing = errors.New("token is invalid or error while `jwt.ParseWithClaims()` calling")
 
 // New creates a new Auth handler with the given user data access layer,
 // cookie name, and JWT signing secret.
@@ -112,10 +115,13 @@ func (a *Auth) RegisterNewUser(h http.Handler) http.Handler {
 func (a *Auth) AuthenticateUser(h http.Handler) http.Handler {
 	middleware := func(response http.ResponseWriter, request *http.Request) {
 		userID, err := a.getUserIDFromAuthorizationHeaderOrCookie(request)
-		if err != nil {
+		if err != nil && !errors.Is(err, errInvalidTokenOrJwtParsing) {
 			logger.Log.Debugln("Error calling the `a.getUserIDFromAuthorizationHeaderOrCookie()`: ", zap.Error(err))
 			response.WriteHeader(http.StatusInternalServerError)
 			return
+		}
+		if errors.Is(err, errInvalidTokenOrJwtParsing) {
+			logger.Log.Debugln("Error calling the `a.getUserIDFromAuthorizationHeader()`: ", zap.Error(err))
 		}
 
 		usr, err := a.db.GetUserByID(request.Context(), userID, nil)
@@ -161,7 +167,7 @@ func (a *Auth) getUserIDFromAuthorizationHeaderOrCookie(request *http.Request) (
 		},
 	)
 	if err != nil || !token.Valid {
-		return "", nil
+		return "", fmt.Errorf("%w: %w", errInvalidTokenOrJwtParsing, err)
 	}
 
 	return claims.UserID, nil

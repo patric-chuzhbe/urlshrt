@@ -36,7 +36,7 @@ type userUrlsKeeper interface {
 	GetUserUrls(
 		ctx context.Context,
 		userID string,
-		shortURLFormatter models.URLFormatter, /*func(string) string*/
+		shortURLFormatter models.URLFormatter,
 	) (models.UserUrls, error)
 
 	SaveUserUrls(
@@ -273,7 +273,7 @@ func isGetapiuserurlsResultMatch(request models.BatchShortenRequest, response mo
 }
 
 func ExampleRouter_GetApiuserurls() {
-	server, db, router := setupTestRouter(nil, withMockAuth(true))
+	server, db, r := setupTestRouter(nil, withMockAuth(true))
 	server.Close()
 
 	userID, err := db.CreateUser(context.Background(), &user.User{}, nil)
@@ -297,7 +297,7 @@ func ExampleRouter_GetApiuserurls() {
 
 	rec := httptest.NewRecorder()
 
-	router.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	req, err = http.NewRequest(http.MethodGet, server.URL+"/api/user/urls", nil)
 	if err != nil {
@@ -308,7 +308,7 @@ func ExampleRouter_GetApiuserurls() {
 
 	rec = httptest.NewRecorder()
 
-	router.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	var result models.UserUrls
 	json.NewDecoder(rec.Body).Decode(&result)
