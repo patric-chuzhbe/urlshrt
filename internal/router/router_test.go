@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/mock"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/mockstorage"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-resty/resty/v2"
@@ -39,7 +44,7 @@ import (
 
 const (
 	testDBFileName = "db_test.json"
-	databaseDSN    = ""
+	databaseDSN    = "" // host=localhost user=video password=x7lKzhrpL8E9LsZ4rQfXnk3pJutOQV dbname=videos sslmode=disable
 	migrationsDir  = `../../cmd/shortener/migrations`
 )
 
@@ -63,7 +68,8 @@ func (m *mockAuth) RegisterNewUser(h http.Handler) http.Handler {
 type initOption func(*initOptions)
 
 type initOptions struct {
-	mockAuth bool
+	mockAuth    bool
+	mockStorage testStorage
 }
 
 func getPostApishortenbatchRequest(amountOfURLs int) models.BatchShortenRequest {
@@ -537,9 +543,13 @@ eshche odna stroka
 	}
 }
 
-type mockUrlsRemover struct{}
+type mockUrlsRemover struct {
+	jobs []*models.URLDeleteJob
+}
 
-func (m *mockUrlsRemover) EnqueueJob(job *models.URLDeleteJob) {}
+func (m *mockUrlsRemover) EnqueueJob(job *models.URLDeleteJob) {
+	m.jobs = append(m.jobs, job)
+}
 
 func BenchmarkPostApishortenbatch(b *testing.B) {
 	cfg, err := config.New(config.WithDisableFlagsParsing(true))
@@ -602,13 +612,19 @@ func BenchmarkPostApishortenbatch(b *testing.B) {
 	}
 }
 
+func withMockStorage(db testStorage) initOption {
+	return func(options *initOptions) {
+		options.mockStorage = db
+	}
+}
+
 func withMockAuth(value bool) initOption {
 	return func(options *initOptions) {
 		options.mockAuth = value
 	}
 }
 
-func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server, testStorage, *chi.Mux) {
+func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server, testStorage, *chi.Mux, *mockUrlsRemover) {
 	options := &initOptions{}
 	for _, protoOption := range optionsProto {
 		protoOption(options)
@@ -619,7 +635,20 @@ func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server
 		require.NoError(t, err)
 	}
 
-	db, err := memorystorage.New()
+	var db testStorage
+	if options.mockStorage != nil {
+		db = options.mockStorage
+	} else if databaseDSN != "" {
+		db, err = postgresdb.New(
+			context.Background(),
+			databaseDSN,
+			cfg.DBConnectionTimeout,
+			migrationsDir,
+			postgresdb.WithDBPreReset(true),
+		)
+	} else {
+		db, err = memorystorage.New()
+	}
 	if t != nil {
 		require.NoError(t, err)
 	}
@@ -637,11 +666,13 @@ func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server
 		authMiddleware = auth.New(db, cfg.AuthCookieName, authKey)
 	}
 
+	urlsRemover := &mockUrlsRemover{}
+
 	theRouter := New(
 		db,
 		cfg.ShortURLBase,
 		authMiddleware,
-		&mockUrlsRemover{},
+		urlsRemover,
 	)
 
 	err = logger.Init("debug")
@@ -649,11 +680,11 @@ func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server
 		require.NoError(t, err)
 	}
 
-	return httptest.NewServer(theRouter), db, theRouter
+	return httptest.NewServer(theRouter), db, theRouter, urlsRemover
 }
 
 func TestPostApishortenbatch(t *testing.T) {
-	server, db, _ := setupTestRouter(t)
+	server, db, _, _ := setupTestRouter(t)
 	defer server.Close()
 
 	type requestItem struct {
@@ -783,4 +814,176 @@ func TestPostApishortenbatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteApiuserurls(t *testing.T) {
+	server, db, r, urlsRemover := setupTestRouter(t, withMockAuth(true))
+	server.Close()
+
+	userID, err := db.CreateUser(context.Background(), &user.User{}, nil)
+	require.NoError(t, err)
+
+	t.Run("positive case - valid user and URLs", func(t *testing.T) {
+		batchRequest := getPostApishortenbatchRequest(3)
+		bodyBytes, err := json.Marshal(batchRequest)
+		require.NoError(t, err)
+
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/api/shorten/batch", bytes.NewReader(bodyBytes))
+		require.NoError(t, err)
+
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+
+		rec := httptest.NewRecorder()
+
+		r.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		var postAPIShortenBatchResult models.UserUrls
+		err = json.NewDecoder(rec.Body).Decode(&postAPIShortenBatchResult)
+		require.NoError(t, err)
+
+		re := regexp.MustCompile(`http://\w+:\d+/(\w+-\w+-\w+-\w+-\w+)`)
+		urls := func() models.DeleteURLsRequest {
+			var result models.DeleteURLsRequest
+			for _, item := range postAPIShortenBatchResult {
+				matches := re.FindStringSubmatch(item.ShortURL)
+				if len(matches) == 2 {
+					result = append(result, matches[1])
+				}
+			}
+			return result
+		}()
+
+		body, err := json.Marshal(urls)
+		require.NoError(t, err)
+		req, err = http.NewRequest(http.MethodDelete, server.URL+"/api/user/urls", bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+
+		rec = httptest.NewRecorder()
+
+		r.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusAccepted, rec.Code)
+		assert.Equal(t, 1, len(urlsRemover.jobs))
+	})
+
+	t.Run("unauthorized - missing user ID in context", func(t *testing.T) {
+		body, err := json.Marshal(models.DeleteURLsRequest([]string{"abc"}))
+		require.NoError(t, err)
+		req, err := http.NewRequest(http.MethodDelete, server.URL+"/api/user/urls", bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("internal error - invalid payload structure", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodDelete, server.URL+"/api/user/urls", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
+
+	t.Run("internal error - malformed JSON", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodDelete, server.URL+"/api/user/urls", strings.NewReader(`[{malformed json`))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
+}
+
+func TestGetApiuserurls(t *testing.T) {
+	server, db, r, _ := setupTestRouter(t, withMockAuth(true))
+	defer server.Close()
+
+	userID, err := db.CreateUser(context.Background(), &user.User{}, nil)
+	require.NoError(t, err)
+
+	t.Run("ok: user with multiple URLs", func(t *testing.T) {
+		batchRequest := getPostApishortenbatchRequest(3)
+		bodyBytes, err := json.Marshal(batchRequest)
+		require.NoError(t, err)
+
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/api/shorten/batch", bytes.NewReader(bodyBytes))
+		require.NoError(t, err)
+
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+
+		rec := httptest.NewRecorder()
+
+		r.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		var postAPIShortenBatchResult models.UserUrls
+		err = json.NewDecoder(rec.Body).Decode(&postAPIShortenBatchResult)
+		require.NoError(t, err)
+
+		req = httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+		rec = httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var result models.UserUrls
+		err = json.NewDecoder(rec.Body).Decode(&result)
+		require.NoError(t, err)
+		assert.Len(t, result, 3)
+	})
+
+	t.Run("empty result: user exists but no URLs", func(t *testing.T) {
+		userID, err := db.CreateUser(context.Background(), &user.User{}, nil)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+	})
+
+	t.Run("unauthorized: no user in context", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("internal error in the db.GetUserUrls() method", func(t *testing.T) {
+		db := new(mockstorage.StorageMock)
+		server, _, r, _ := setupTestRouter(t, withMockAuth(true), withMockStorage(db))
+		defer server.Close()
+
+		db.On(
+			"GetUserUrls",
+			mock.Anything,
+			userID,
+			mock.Anything,
+		).
+			Return(
+				models.UserUrls(nil),
+				errors.New("db error"),
+			)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
 }

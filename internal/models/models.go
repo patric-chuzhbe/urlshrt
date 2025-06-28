@@ -54,7 +54,7 @@ const (
 	StorageTypeMemory
 )
 
-// DeleteURLsRequest represents a slice of URLs to be deleted.
+// DeleteURLsRequest represents a slice of short keys of URLs to be deleted.
 // Used as request body in batch delete operations.
 type DeleteURLsRequest []string
 
