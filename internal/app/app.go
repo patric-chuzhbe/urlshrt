@@ -47,7 +47,7 @@ type UserUrlsKeeper interface {
 	GetUserUrls(
 		ctx context.Context,
 		userID string,
-		shortURLFormatter models.URLFormatter, /*func(string) string*/
+		shortURLFormatter models.URLFormatter,
 	) (models.UserUrls, error)
 
 	// SaveUserUrls stores mappings between a user and a list of full URLs.
@@ -147,7 +147,7 @@ type Remover interface {
 type App struct {
 	cfg             *config.Config
 	db              Storage
-	urlsRemover     Remover /* *urlsremover.URLsRemover */
+	urlsRemover     Remover
 	stopUrlsRemover context.CancelFunc
 	httpHandler     http.Handler
 	server          *http.Server
@@ -223,14 +223,13 @@ func (a *App) Run() error {
 
 	logger.Log.Infoln("server running", "RunAddr", a.cfg.RunAddr)
 
-	//a.server := &http.Server{
-	//	Addr:    a.cfg.RunAddr,
-	//	Handler: a.httpHandler,
-	//}
-
 	serverErrCh := make(chan error, 1)
 	go func() {
-		serverErrCh <- a.server.ListenAndServe()
+		if a.cfg.EnableHTTPS {
+			serverErrCh <- a.server.ListenAndServeTLS(a.cfg.CertFile, a.cfg.KeyFile)
+		} else {
+			serverErrCh <- a.server.ListenAndServe()
+		}
 	}()
 
 	select {

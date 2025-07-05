@@ -2,7 +2,10 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"time"
 
@@ -26,6 +29,9 @@ type Config struct {
 	ChannelCapacity            int           `env:"CHANNEL_CAPACITY" envDefault:"1024"`                                   // Channel capacity for background jobs
 	DelayBetweenQueueFetches   time.Duration `env:"DELAY_BETWEEN_QUEUE_FETCHES" envDefault:"5s"`                          // Delay between attempts to dequeue jobs
 	MigrationsDir              string        `env:"MIGRATIONS_DIR" envDefault:"migrations"`                               // Directory path for database migration files
+	EnableHTTPS                bool          `env:"ENABLE_HTTPS" envDefault:"false"`
+	CertFile                   string        `env:"CERT_FILE" envDefault:"../../cert/cert.pem"`
+	KeyFile                    string        `env:"KEY_FILE" envDefault:"../../cert/key.pem"`
 }
 
 type initOptions struct {
@@ -60,7 +66,18 @@ func New(optionsProto ...InitOption) (*Config, error) {
 		flag.StringVar(&values.LogLevel, "l", values.LogLevel, "logger level")
 		flag.StringVar(&values.DBFileName, "f", values.DBFileName, "JSON file name with database")
 		flag.StringVar(&values.DatabaseDSN, "d", values.DatabaseDSN, "A string with the database connection details")
+		flag.BoolVar(&values.EnableHTTPS, "s", values.EnableHTTPS, "HTTPS enabling flag")
 		flag.Parse()
+	}
+
+	err = values.clarifyRunAddr()
+	if err != nil {
+		return nil, err
+	}
+
+	err = values.clarifyShortURLBase()
+	if err != nil {
+		return nil, err
 	}
 
 	return &values, values.Validate()
@@ -112,4 +129,42 @@ func validateLogLevel(fieldLevel validator.FieldLevel) bool {
 	}
 
 	return allowedLogLevels[value]
+}
+
+func (conf *Config) clarifyRunAddr() error {
+	host, port, err := net.SplitHostPort(conf.RunAddr)
+	if err != nil {
+		return fmt.Errorf("in internal/config/config.go/clarifyRunAddr(): error while `net.SplitHostPort()` calling: %w", err)
+	}
+
+	if conf.EnableHTTPS && (port == "8080" || port == "80") {
+		port = "443"
+	}
+
+	conf.RunAddr = net.JoinHostPort(host, port)
+
+	return nil
+}
+
+func (conf *Config) clarifyShortURLBase() error {
+	if !conf.EnableHTTPS {
+		return nil
+	}
+
+	parsed, err := url.Parse(conf.ShortURLBase)
+	if err != nil {
+		return fmt.Errorf("in internal/config/config.go/clarifyShortURLBase(): error while `url.Parse()` calling: %w", err)
+	}
+	host, port, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		return fmt.Errorf("in internal/config/config.go/clarifyShortURLBase(): error while `net.SplitHostPort()` calling: %w", err)
+	}
+	if port == "443" || port == "80" || port == "8080" {
+		port = ""
+	} else {
+		port = fmt.Sprintf(":%s", port)
+	}
+	conf.ShortURLBase = fmt.Sprintf("https://%s%s", host, port)
+
+	return nil
 }
