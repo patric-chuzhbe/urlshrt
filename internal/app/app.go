@@ -218,7 +218,13 @@ func New() (*App, error) {
 // Run starts the HTTP server with graceful shutdown support.
 // It listens for system signals and cleans up resources upon termination.
 func (a *App) Run() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
 	defer stop()
 
 	logger.Log.Infoln("server running", "RunAddr", a.cfg.RunAddr)
