@@ -9,11 +9,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/ipchecker"
 
 	"go.uber.org/zap"
 
@@ -64,6 +67,10 @@ type UserUrlsKeeper interface {
 		ctx context.Context,
 		usersURLs map[string][]string,
 	) error
+
+	GetNumberOfShortenedURLs(ctx context.Context) (int64, error)
+
+	GetNumberOfUsers(ctx context.Context) (int64, error)
 }
 
 // Transactioner defines methods for handling database transactions.
@@ -142,6 +149,14 @@ type Remover interface {
 	EnqueueJob(job *models.URLDeleteJob)
 }
 
+type ipChecker interface {
+	IsTrustedSubnetEmpty() bool
+
+	GetClientIP(request *http.Request) (net.IP, error)
+
+	Check(clientIP net.IP) bool
+}
+
 // App encapsulates the configuration, HTTP handler, Storage backend,
 // and background services (such as URL remover) needed to run the URL shortener service.
 type App struct {
@@ -151,6 +166,7 @@ type App struct {
 	stopUrlsRemover context.CancelFunc
 	httpHandler     http.Handler
 	server          *http.Server
+	ipChecker       ipChecker
 }
 
 // New initializes a new instance of App by:
@@ -196,6 +212,11 @@ func New() (*App, error) {
 		logger.Log.Debugln("Error passed from the `app.urlsRemover.ListenErrors()`:", zap.Error(err))
 	})
 
+	ipChecker, err := ipchecker.New(app.cfg.TrustedSubnet)
+	if err != nil {
+		return nil, err
+	}
+
 	app.httpHandler = router.New(
 		app.db,
 		app.cfg.ShortURLBase,
@@ -205,6 +226,7 @@ func New() (*App, error) {
 			authCookieSigningSecretKey,
 		),
 		app.urlsRemover,
+		ipChecker,
 	)
 
 	app.server = &http.Server{

@@ -20,19 +20,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
+	"github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
 	"github.com/patric-chuzhbe/urlshrt/internal/mockstorage"
 
+	"github.com/patric-chuzhbe/urlshrt/internal/ipchecker"
+
 	"github.com/go-chi/chi/v5"
-	"github.com/go-resty/resty/v2"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/patric-chuzhbe/urlshrt/internal/db/jsondb"
-	"github.com/patric-chuzhbe/urlshrt/internal/db/postgresdb"
-	"github.com/patric-chuzhbe/urlshrt/internal/gzippedhttp"
-
 	"github.com/stretchr/testify/require"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/db/postgresdb"
 
 	"github.com/patric-chuzhbe/urlshrt/internal/auth"
 	"github.com/patric-chuzhbe/urlshrt/internal/config"
@@ -583,11 +585,15 @@ func BenchmarkPostApishortenbatch(b *testing.B) {
 	err = logger.Init("debug")
 	require.NoError(b, err)
 
+	ipChecker, err := ipchecker.New(cfg.TrustedSubnet)
+	require.NoError(b, err)
+
 	theRouter := New(
 		db,
 		cfg.ShortURLBase,
 		theAuth,
 		&mockUrlsRemover{},
+		ipChecker,
 	)
 
 	server := httptest.NewServer(theRouter)
@@ -668,11 +674,15 @@ func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server
 
 	urlsRemover := &mockUrlsRemover{}
 
+	ipChecker, err := ipchecker.New(cfg.TrustedSubnet)
+	require.NoError(t, err)
+
 	theRouter := New(
 		db,
 		cfg.ShortURLBase,
 		authMiddleware,
 		urlsRemover,
+		ipChecker,
 	)
 
 	err = logger.Init("debug")
@@ -985,5 +995,94 @@ func TestGetApiuserurls(t *testing.T) {
 		r.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
+}
+
+func TestGetApiinternalstats(t *testing.T) {
+	server, db, r, _ := setupTestRouter(t, withMockAuth(true))
+	defer server.Close()
+
+	var userID string
+	var err error
+	for i := 0; i < 2; i++ {
+		userID, err = db.CreateUser(context.Background(), &user.User{}, nil)
+		require.NoError(t, err)
+	}
+
+	batchRequest := getPostApishortenbatchRequest(5)
+	bodyBytes, err := json.Marshal(batchRequest)
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/shorten/batch", bytes.NewReader(bodyBytes))
+	require.NoError(t, err)
+
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), auth.UserIDKey, userID))
+
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	t.Run("success with trusted IP", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/api/internal/stats", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("X-Real-IP", "127.0.0.1")
+
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var result models.InternalStatsResponse
+		err = json.NewDecoder(rec.Body).Decode(&result)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(5), result.URLs)
+		require.Equal(t, int64(2), result.Users)
+	})
+
+	t.Run("denied from untrusted IP", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/api/internal/stats", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("X-Real-IP", "10.0.0.1")
+
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("missing IP header", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/api/internal/stats", nil)
+		require.NoError(t, err)
+
+		req.RemoteAddr = "127.0.0.1:12345"
+
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var result models.InternalStatsResponse
+		err = json.NewDecoder(rec.Body).Decode(&result)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(5), result.URLs)
+		require.Equal(t, int64(2), result.Users)
+	})
+
+	t.Run("invalid IP in header", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/api/internal/stats", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("X-Real-IP", "not-an-ip")
+
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 }

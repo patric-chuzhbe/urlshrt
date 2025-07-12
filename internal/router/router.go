@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 
@@ -44,6 +45,10 @@ type userUrlsKeeper interface {
 		urls []string,
 		transaction *sql.Tx,
 	) error
+
+	GetNumberOfShortenedURLs(ctx context.Context) (int64, error)
+
+	GetNumberOfUsers(ctx context.Context) (int64, error)
 }
 
 type transactioner interface {
@@ -94,6 +99,14 @@ type storage interface {
 	pinger
 }
 
+type ipChecker interface {
+	IsTrustedSubnetEmpty() bool
+
+	GetClientIP(request *http.Request) (net.IP, error)
+
+	Check(clientIP net.IP) bool
+}
+
 // Router defines the application's HTTP router, which handles incoming requests
 // for the URL shortening service. It encapsulates the mux router and its associated
 // dependencies such as storage, authentication, and logger middleware.
@@ -105,6 +118,7 @@ type Router struct {
 	shortURLBase string
 	urlsRemover  urlsRemover
 	validator    *validator.Validate
+	ipChecker    ipChecker
 }
 
 var urlPattern = regexp.MustCompile(`\bhttps?://\S+\b`)
@@ -118,11 +132,13 @@ func New(
 	shortURLBase string,
 	auth authenticator,
 	urlsRemover urlsRemover,
+	ipChecker ipChecker,
 ) *chi.Mux {
 	myRouter := Router{
 		db:           database,
 		shortURLBase: shortURLBase,
 		urlsRemover:  urlsRemover,
+		ipChecker:    ipChecker,
 	}
 	router := chi.NewRouter()
 
@@ -161,6 +177,8 @@ func New(
 	router.With(
 		auth.AuthenticateUser,
 	).Delete(`/api/user/urls`, myRouter.DeleteApiuserurls)
+
+	router.With(gzippedHttp.GzipResponse).Get(`/api/internal/stats`, myRouter.GetApiinternalstats)
 
 	return router
 }
@@ -462,6 +480,59 @@ func (theRouter Router) PostShorten(response http.ResponseWriter, request *http.
 	_, err = response.Write([]byte(theRouter.getShortURL(shortKey)))
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+}
+
+// GetApiinternalstats handles the GET /api/internal/stats endpoint,
+// which returns internal metrics such as the total number of shortened URLs
+// and the number of registered users in the system.
+//
+// Access to this endpoint is restricted to requests originating from
+// a trusted subnet. The client IP is extracted from standard headers
+// like X-Real-IP or X-Forwarded-For, and validated against the configured
+// trusted subnet.
+//
+// If the client is from the trusted subnet, the handler responds with a JSON payload
+// containing system statistics. Otherwise, it returns 403 Forbidden
+// or an appropriate error code for invalid requests.
+func (theRouter Router) GetApiinternalstats(response http.ResponseWriter, request *http.Request) {
+	if theRouter.ipChecker.IsTrustedSubnetEmpty() {
+		response.WriteHeader(http.StatusForbidden)
+		return
+	}
+	clientIP, err := theRouter.ipChecker.GetClientIP(request)
+	if err != nil || string(clientIP) == "" {
+		response.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if !theRouter.ipChecker.Check(clientIP) {
+		response.WriteHeader(http.StatusForbidden)
+		return
+	}
+	numberOfShortenedURLs, err := theRouter.db.GetNumberOfShortenedURLs(request.Context())
+	if err != nil {
+		logger.Log.Debugln("Error calling the `theRouter.db.GetNumberOfShortenedURLs()`: ", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	numberOfUsers, err := theRouter.db.GetNumberOfUsers(request.Context())
+	if err != nil {
+		logger.Log.Debugln("Error calling the `theRouter.db.GetNumberOfUsers()`: ", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	responseDTO := models.InternalStatsResponse{
+		URLs:  numberOfShortenedURLs,
+		Users: numberOfUsers,
+	}
+
+	response.Header().Set("Content-Type", "application/json")
+
+	err = json.NewEncoder(response).Encode(responseDTO)
+	if err != nil {
+		logger.Log.Debug("error encoding response", zap.Error(err))
+		response.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 }

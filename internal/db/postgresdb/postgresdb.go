@@ -111,7 +111,7 @@ func (db *PostgresDB) RemoveUsersUrls(
 				return err
 			}
 			err = qtx.RemoveUsersUrls(ctx, sqlc.RemoveUsersUrlsParams{
-				UserID:   userIDAsUUID, /* userID*/
+				UserID:   userIDAsUUID,
 				ShortUrl: url,
 			})
 			if err != nil {
@@ -121,10 +121,6 @@ func (db *PostgresDB) RemoveUsersUrls(
 				}
 				return err
 			}
-			//if err != nil {
-			//	tx.Rollback()
-			//	return err
-			//}
 		}
 	}
 
@@ -152,7 +148,7 @@ func (db *PostgresDB) SaveUserUrls(
 			return err
 		}
 		err = qtx.SaveUserUrl(ctx, sqlc.SaveUserUrlParams{
-			UserID: userIDAsUUID, /* userID*/
+			UserID: userIDAsUUID,
 			Url:    url,
 		})
 		if err != nil {
@@ -168,7 +164,7 @@ func (db *PostgresDB) SaveUserUrls(
 func (db *PostgresDB) GetUserUrls(
 	ctx context.Context,
 	userID string,
-	shortURLFormatter models.URLFormatter, /*func(string) string*/
+	shortURLFormatter models.URLFormatter,
 ) (models.UserUrls, error) {
 	formatter := func(str string) string { return str }
 	if shortURLFormatter != nil {
@@ -428,6 +424,18 @@ func (db *PostgresDB) Close() error {
 	}
 
 	return nil
+}
+
+// GetNumberOfUsers returns the total number of user records
+// in the "users" table of the PostgreSQL database.
+func (db *PostgresDB) GetNumberOfUsers(ctx context.Context) (int64, error) {
+	return db.queries.GetNumberOfUsers(ctx)
+}
+
+// GetNumberOfShortenedURLs returns the total count of shortened URLs
+// that have not been marked as deleted in the "url_redirects" table.
+func (db *PostgresDB) GetNumberOfShortenedURLs(ctx context.Context) (int64, error) {
+	return db.queries.GetNumberOfShortenedURLs(ctx)
 }
 
 func (db *PostgresDB) resetDB(ctx context.Context) error {
