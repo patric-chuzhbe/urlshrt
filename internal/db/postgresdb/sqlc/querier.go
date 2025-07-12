@@ -15,6 +15,8 @@ type Querier interface {
 	FindFullByShort(ctx context.Context, short string) (FindFullByShortRow, error)
 	FindShortByFull(ctx context.Context, originalUrl string) (string, error)
 	FindShortsByFulls(ctx context.Context, originalUrls []string) ([]FindShortsByFullsRow, error)
+	GetNumberOfShortenedURLs(ctx context.Context) (int64, error)
+	GetNumberOfUsers(ctx context.Context) (int64, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error)
 	GetUserUrls(ctx context.Context, userID uuid.UUID) ([]GetUserUrlsRow, error)
 	InsertURLMapping(ctx context.Context, arg InsertURLMappingParams) error
