@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/patric-chuzhbe/urlshrt/internal/service"
+
 	"github.com/patric-chuzhbe/urlshrt/internal/ipchecker"
 
 	"github.com/go-chi/chi/v5"
@@ -168,12 +170,17 @@ func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server
 		require.NoError(t, err)
 	}
 
+	s := service.New(
+		db,
+		&mockUrlsRemover{},
+		cfg.ShortURLBase,
+	)
+
 	theRouter := router.New(
 		db,
-		cfg.ShortURLBase,
 		authMiddleware,
-		&mockUrlsRemover{},
 		ipChecker,
+		s,
 	)
 
 	err = logger.Init("debug")

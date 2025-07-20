@@ -48,7 +48,7 @@ type ContextKey string
 // UserIDKey is the context key used to store and retrieve the authenticated user's ID.
 const UserIDKey ContextKey = "userID"
 
-var errInvalidTokenOrJwtParsing = errors.New("token is invalid or error while `jwt.ParseWithClaims()` calling")
+var ErrInvalidTokenOrJwtParsing = errors.New("token is invalid or error while `jwt.ParseWithClaims()` calling")
 
 // New creates a new Auth handler with the given user data access layer,
 // cookie name, and JWT signing secret.
@@ -83,9 +83,9 @@ func (a *Auth) RegisterNewUser(h http.Handler) http.Handler {
 			return
 		}
 
-		JWTString, err := a.buildJWTString(&Claims{UserID: userID})
+		JWTString, err := a.BuildJWTString(&Claims{UserID: userID})
 		if err != nil {
-			logger.Log.Debugln("Error calling the `a.buildJWTString()`: ", zap.Error(err))
+			logger.Log.Debugln("Error calling the `a.BuildJWTString()`: ", zap.Error(err))
 			response.WriteHeader(http.StatusInternalServerError)
 
 			return
@@ -115,12 +115,12 @@ func (a *Auth) RegisterNewUser(h http.Handler) http.Handler {
 func (a *Auth) AuthenticateUser(h http.Handler) http.Handler {
 	middleware := func(response http.ResponseWriter, request *http.Request) {
 		userID, err := a.getUserIDFromAuthorizationHeaderOrCookie(request)
-		if err != nil && !errors.Is(err, errInvalidTokenOrJwtParsing) {
+		if err != nil && !errors.Is(err, ErrInvalidTokenOrJwtParsing) {
 			logger.Log.Debugln("Error calling the `a.getUserIDFromAuthorizationHeaderOrCookie()`: ", zap.Error(err))
 			response.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		if errors.Is(err, errInvalidTokenOrJwtParsing) {
+		if errors.Is(err, ErrInvalidTokenOrJwtParsing) {
 			logger.Log.Debugln("Error calling the `a.getUserIDFromAuthorizationHeader()`: ", zap.Error(err))
 		}
 
@@ -154,7 +154,21 @@ func (a *Auth) getTokenStringFromAuthorizationHeaderOrCookie(request *http.Reque
 }
 
 func (a *Auth) getUserIDFromAuthorizationHeaderOrCookie(request *http.Request) (string, error) {
-	tokenString := a.getTokenStringFromAuthorizationHeaderOrCookie(request)
+	return a.GetUserIDFromToken(a.getTokenStringFromAuthorizationHeaderOrCookie(request))
+}
+
+func (a *Auth) BuildJWTString(claims *Claims) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, *claims)
+
+	tokenString, err := token.SignedString(a.authCookieSigningSecretKey)
+	if err != nil {
+		return "", err
+	}
+
+	return tokenString, nil
+}
+
+func (a *Auth) GetUserIDFromToken(tokenString string) (string, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(
 		tokenString,
@@ -167,19 +181,8 @@ func (a *Auth) getUserIDFromAuthorizationHeaderOrCookie(request *http.Request) (
 		},
 	)
 	if err != nil || !token.Valid {
-		return "", fmt.Errorf("%w: %w", errInvalidTokenOrJwtParsing, err)
+		return "", fmt.Errorf("%w: %w", ErrInvalidTokenOrJwtParsing, err)
 	}
 
 	return claims.UserID, nil
-}
-
-func (a *Auth) buildJWTString(claims *Claims) (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, *claims)
-
-	tokenString, err := token.SignedString(a.authCookieSigningSecretKey)
-	if err != nil {
-		return "", err
-	}
-
-	return tokenString, nil
 }

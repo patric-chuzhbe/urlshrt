@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/patric-chuzhbe/urlshrt/internal/service"
+
 	"github.com/go-resty/resty/v2"
 	"github.com/stretchr/testify/mock"
 
@@ -154,8 +156,12 @@ func TestPostApishortenForGzip(t *testing.T) {
 	}()
 
 	myRouter := Router{
-		db:           db,
-		shortURLBase: cfg.ShortURLBase,
+		db: db,
+		service: service.New(
+			db,
+			&mockUrlsRemover{},
+			cfg.ShortURLBase,
+		),
 	}
 
 	authCookieSigningSecretKey, err := base64.URLEncoding.DecodeString(cfg.AuthCookieSigningSecretKey)
@@ -313,8 +319,12 @@ func TestPostApishorten(t *testing.T) {
 	)
 
 	myRouter := Router{
-		db:           theDB,
-		shortURLBase: cfg.ShortURLBase,
+		db: theDB,
+		service: service.New(
+			theDB,
+			&mockUrlsRemover{},
+			cfg.ShortURLBase,
+		),
 	}
 
 	router := chi.NewRouter()
@@ -472,8 +482,12 @@ eshche odna stroka
 			}()
 
 			myRouter := Router{
-				db:           theDB,
-				shortURLBase: cfg.ShortURLBase,
+				db: theDB,
+				service: service.New(
+					theDB,
+					&mockUrlsRemover{},
+					cfg.ShortURLBase,
+				),
 			}
 
 			var shortURL []byte
@@ -588,12 +602,17 @@ func BenchmarkPostApishortenbatch(b *testing.B) {
 	ipChecker, err := ipchecker.New(cfg.TrustedSubnet)
 	require.NoError(b, err)
 
+	s := service.New(
+		db,
+		&mockUrlsRemover{},
+		cfg.ShortURLBase,
+	)
+
 	theRouter := New(
 		db,
-		cfg.ShortURLBase,
 		theAuth,
-		&mockUrlsRemover{},
 		ipChecker,
+		s,
 	)
 
 	server := httptest.NewServer(theRouter)
@@ -677,12 +696,17 @@ func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server
 	ipChecker, err := ipchecker.New(cfg.TrustedSubnet)
 	require.NoError(t, err)
 
+	s := service.New(
+		db,
+		urlsRemover,
+		cfg.ShortURLBase,
+	)
+
 	theRouter := New(
 		db,
-		cfg.ShortURLBase,
 		authMiddleware,
-		urlsRemover,
 		ipChecker,
+		s,
 	)
 
 	err = logger.Init("debug")

@@ -36,6 +36,8 @@ type Config struct {
 	KeyFile                    string        `env:"KEY_FILE"`
 	JSONConfigFilePath         string        `env:"CONFIG"`
 	TrustedSubnet              string        `env:"TRUSTED_SUBNET" json:"trusted_subnet"`
+	GRPCEnabled                bool          `env:"GRPC_ENABLED"`
+	GRPCAddress                string        `env:"GRPC_ADDRESS"`
 }
 
 var defaultConfig = Config{
@@ -54,6 +56,8 @@ var defaultConfig = Config{
 	KeyFile:                    "../../cert/key.pem",
 	JSONConfigFilePath:         "config.json",
 	TrustedSubnet:              "127.0.0.0/8",
+	GRPCEnabled:                false,
+	GRPCAddress:                ":50051",
 }
 
 type initOptions struct {
