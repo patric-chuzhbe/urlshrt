@@ -65,7 +65,7 @@ func (a *AuthInterceptor) UnaryAuthInterceptor(allowedMethods []string) grpc.Una
 		userID, err := a.auth.GetUserIDFromToken(authHeader[0])
 		if err != nil && !errors.Is(err, auth.ErrInvalidTokenOrJwtParsing) {
 			logger.Log.Debugln("Error calling the `a.auth.GetUserIDFromToken()`: ", zap.Error(err))
-			return nil, status.Errorf(codes.Internal, "Error calling the `a.auth.GetUserIDFromToken()`: %v", err)
+			return nil, status.Error(codes.Internal, "internal server error")
 		}
 		if errors.Is(err, auth.ErrInvalidTokenOrJwtParsing) {
 			logger.Log.Debugln("Error calling the `a.auth.GetUserIDFromToken()`: ", zap.Error(err))
@@ -74,7 +74,7 @@ func (a *AuthInterceptor) UnaryAuthInterceptor(allowedMethods []string) grpc.Una
 		usr, err := a.db.GetUserByID(ctx, userID, nil)
 		if err != nil {
 			logger.Log.Debugln("Error calling the `a.db.GetUserByID()`: ", zap.Error(err))
-			return nil, status.Errorf(codes.Internal, "Error calling the `a.db.GetUserByID()`: %v", err)
+			return nil, status.Error(codes.Internal, "internal server error")
 		}
 
 		ctxWithUser := context.WithValue(ctx, auth.UserIDKey, usr.ID)
@@ -117,13 +117,13 @@ func (a *AuthInterceptor) UnaryRegisterNewUserInterceptor(allowedMethods []strin
 			userID, err = a.db.CreateUser(ctx, &user.User{}, nil)
 			if err != nil {
 				logger.Log.Error("failed to create user", zap.Error(err))
-				return nil, status.Errorf(codes.Internal, "could not register new user")
+				return nil, status.Error(codes.Internal, "could not register new user")
 			}
 
 			token, err := a.auth.BuildJWTString(&auth.Claims{UserID: userID})
 			if err != nil {
 				logger.Log.Error("failed to generate JWT", zap.Error(err))
-				return nil, status.Errorf(codes.Internal, "could not generate token")
+				return nil, status.Error(codes.Internal, "could not generate token")
 			}
 
 			if sendErr := grpc.SendHeader(ctx, metadata.Pairs("authorization", token)); sendErr != nil {

@@ -27,16 +27,16 @@ func NewShortenerHandler(svc *service.Service) *ShortenerHandler {
 func (h *ShortenerHandler) Shorten(ctx context.Context, req *pb.ShortenRequest) (*pb.ShortenResponse, error) {
 	userID, ok := ctx.Value(auth.UserIDKey).(string)
 	if !ok || userID == "" {
-		return nil, status.Errorf(codes.Unauthenticated, "missing user ID")
+		return nil, status.Error(codes.Unauthenticated, "missing user ID")
 	}
 
 	if req.GetUrl() == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "url must not be empty")
+		return nil, status.Error(codes.InvalidArgument, "url must not be empty")
 	}
 
 	URLToShorten, err := h.svc.ExtractFirstURL(req.GetUrl())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, err.Error())
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	short, err := h.svc.ShortenURL(ctx, URLToShorten, userID)
@@ -52,18 +52,18 @@ func (h *ShortenerHandler) Shorten(ctx context.Context, req *pb.ShortenRequest) 
 			AlreadyExists: true,
 		}, nil
 	default:
-		return nil, status.Errorf(codes.Internal, "failed to shorten URL: %v", err)
+		return nil, status.Error(codes.Internal, "failed to shorten URL")
 	}
 }
 
 func (h *ShortenerHandler) Resolve(ctx context.Context, req *pb.ResolveRequest) (*pb.ResolveResponse, error) {
 	ShortURL := req.GetShortUrl()
 	if ShortURL == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "short URL key must not be empty")
+		return nil, status.Error(codes.InvalidArgument, "short URL key must not be empty")
 	}
 	validatedShortURL, err := h.svc.ExtractFirstURL(ShortURL)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, err.Error())
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	shortKey := h.svc.GetShortURLKey(validatedShortURL)
@@ -79,10 +79,10 @@ func (h *ShortenerHandler) Resolve(ctx context.Context, req *pb.ResolveRequest) 
 		}, nil
 
 	case err != nil:
-		return nil, status.Errorf(codes.Internal, "failed to resolve URL: %v", err)
+		return nil, status.Error(codes.Internal, "failed to resolve URL")
 
 	case original == "":
-		return nil, status.Errorf(codes.NotFound, "short URL not found")
+		return nil, status.Error(codes.NotFound, "short URL not found")
 
 	default:
 		return &pb.ResolveResponse{
@@ -95,7 +95,7 @@ func (h *ShortenerHandler) Resolve(ctx context.Context, req *pb.ResolveRequest) 
 
 func (h *ShortenerHandler) Ping(ctx context.Context, _ *pb.PingRequest) (*pb.PingResponse, error) {
 	if err := h.svc.Ping(ctx); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "storage is unavailable: %v", err)
+		return nil, status.Error(codes.Unavailable, "storage is unavailable")
 	}
 	return &pb.PingResponse{Ok: true}, nil
 }
@@ -103,17 +103,17 @@ func (h *ShortenerHandler) Ping(ctx context.Context, _ *pb.PingRequest) (*pb.Pin
 func (h *ShortenerHandler) ShortenBatch(ctx context.Context, req *pb.ShortenBatchRequest) (*pb.ShortenBatchResponse, error) {
 	userID, ok := ctx.Value(auth.UserIDKey).(string)
 	if !ok || userID == "" {
-		return nil, status.Errorf(codes.Unauthenticated, "missing user ID")
+		return nil, status.Error(codes.Unauthenticated, "missing user ID")
 	}
 
 	if len(req.GetItems()) == 0 {
-		return nil, status.Errorf(codes.InvalidArgument, "batch items must not be empty")
+		return nil, status.Error(codes.InvalidArgument, "batch items must not be empty")
 	}
 
 	batch := make(models.BatchShortenRequest, len(req.Items))
 	for i, item := range req.Items {
 		if item.GetCorrelationId() == "" || item.GetOriginalUrl() == "" {
-			return nil, status.Errorf(codes.InvalidArgument, "each batch item must have correlation_id and original_url")
+			return nil, status.Error(codes.InvalidArgument, "each batch item must have correlation_id and original_url")
 		}
 		batch[i] = models.ShortenRequestItem{
 			CorrelationID: item.CorrelationId,
@@ -123,12 +123,12 @@ func (h *ShortenerHandler) ShortenBatch(ctx context.Context, req *pb.ShortenBatc
 
 	validate := validator.New()
 	if err := validate.Var(batch, "dive"); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "found malforme dURL: %v", err)
+		return nil, status.Error(codes.InvalidArgument, "found malforme dURL")
 	}
 
 	result, err := h.svc.BatchShortenURLs(ctx, batch, userID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to shorten batch URLs: %v", err)
+		return nil, status.Error(codes.Internal, "failed to shorten batch URLs")
 	}
 
 	resp := &pb.ShortenBatchResponse{
@@ -148,16 +148,16 @@ func (h *ShortenerHandler) ShortenBatch(ctx context.Context, req *pb.ShortenBatc
 func (h *ShortenerHandler) GetUserURLs(ctx context.Context, req *pb.GetUserURLsRequest) (*pb.GetUserURLsResponse, error) {
 	userID, ok := ctx.Value(auth.UserIDKey).(string)
 	if !ok || userID == "" {
-		return nil, status.Errorf(codes.Unauthenticated, "missing user ID")
+		return nil, status.Error(codes.Unauthenticated, "missing user ID")
 	}
 
 	urls, err := h.svc.GetUserURLs(ctx, userID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to retrieve user URLs: %v", err)
+		return nil, status.Error(codes.Internal, "failed to retrieve user URLs")
 	}
 
 	if len(urls) == 0 {
-		return nil, status.Errorf(codes.NotFound, "no URLs found for user")
+		return nil, status.Error(codes.NotFound, "no URLs found for user")
 	}
 
 	resp := &pb.GetUserURLsResponse{Urls: make([]*pb.UserURL, len(urls))}
@@ -174,11 +174,11 @@ func (h *ShortenerHandler) GetUserURLs(ctx context.Context, req *pb.GetUserURLsR
 func (h *ShortenerHandler) DeleteUserURLs(ctx context.Context, req *pb.DeleteUserURLsRequest) (*pb.DeleteUserURLsResponse, error) {
 	userID, ok := ctx.Value(auth.UserIDKey).(string)
 	if !ok || userID == "" {
-		return nil, status.Errorf(codes.Unauthenticated, "missing user ID")
+		return nil, status.Error(codes.Unauthenticated, "missing user ID")
 	}
 
 	if len(req.GetShortUrls()) == 0 {
-		return nil, status.Errorf(codes.InvalidArgument, "short_urls list must not be empty")
+		return nil, status.Error(codes.InvalidArgument, "short_urls list must not be empty")
 	}
 
 	h.svc.DeleteURLsAsync(ctx, userID, req.GetShortUrls())
@@ -188,7 +188,7 @@ func (h *ShortenerHandler) DeleteUserURLs(ctx context.Context, req *pb.DeleteUse
 func (h *ShortenerHandler) GetInternalStats(ctx context.Context, _ *pb.GetInternalStatsRequest) (*pb.GetInternalStatsResponse, error) {
 	stats, err := h.svc.GetInternalStats(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to retrieve internal stats: %v", err)
+		return nil, status.Error(codes.Internal, "failed to retrieve internal stats")
 	}
 
 	return &pb.GetInternalStatsResponse{
