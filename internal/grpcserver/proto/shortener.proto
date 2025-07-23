@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package shortener;
+
+option go_package = "github.com/patric-chuzhbe/urlshrt/internal/grpcserver/proto";
+
+service ShortenerService {
+  rpc Shorten(ShortenRequest) returns (ShortenResponse);
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc ShortenBatch(ShortenBatchRequest) returns (ShortenBatchResponse);
+  rpc GetUserURLs(GetUserURLsRequest) returns (GetUserURLsResponse);
+  rpc DeleteUserURLs(DeleteUserURLsRequest) returns (DeleteUserURLsResponse);
+  rpc GetInternalStats(GetInternalStatsRequest) returns (GetInternalStatsResponse);
+}
+
+message ShortenRequest {
+  string url = 1;
+}
+
+message ShortenResponse {
+  string short_url = 1;
+  bool already_exists = 2;
+}
+
+message ResolveRequest {
+  string short_url = 1;
+}
+
+message ResolveResponse {
+  string original_url = 1;
+  bool is_deleted = 2;
+  bool found = 3;
+}
+
+message PingRequest {}
+
+message PingResponse {
+  bool ok = 1;
+}
+
+message ShortenBatchRequest {
+  repeated ShortenBatchItem items = 2;
+}
+
+message ShortenBatchItem {
+  string correlation_id = 1;
+  string original_url = 2;
+}
+
+message ShortenBatchResponse {
+  repeated ShortenBatchResult results = 1;
+}
+
+message ShortenBatchResult {
+  string correlation_id = 1;
+  string short_url = 2;
+}
+
+message GetUserURLsRequest {}
+
+message GetUserURLsResponse {
+  repeated UserURL urls = 1;
+}
+
+message UserURL {
+  string short_url = 1;
+  string original_url = 2;
+}
+
+message DeleteUserURLsRequest {
+  repeated string short_urls = 2;
+}
+
+message DeleteUserURLsResponse {
+  bool accepted = 1;
+}
+
+message GetInternalStatsRequest {}
+
+message GetInternalStatsResponse {
+  int64 urls = 1;
+  int64 users = 2;
+}

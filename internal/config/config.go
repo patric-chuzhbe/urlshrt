@@ -35,6 +35,9 @@ type Config struct {
 	CertFile                   string        `env:"CERT_FILE"`
 	KeyFile                    string        `env:"KEY_FILE"`
 	JSONConfigFilePath         string        `env:"CONFIG"`
+	TrustedSubnet              string        `env:"TRUSTED_SUBNET" json:"trusted_subnet"`
+	GRPCEnabled                bool          `env:"GRPC_ENABLED"`
+	GRPCAddress                string        `env:"GRPC_ADDRESS"`
 }
 
 var defaultConfig = Config{
@@ -52,6 +55,9 @@ var defaultConfig = Config{
 	CertFile:                   "../../cert/cert.pem",
 	KeyFile:                    "../../cert/key.pem",
 	JSONConfigFilePath:         "config.json",
+	TrustedSubnet:              "127.0.0.0/8",
+	GRPCEnabled:                false,
+	GRPCAddress:                ":50051",
 }
 
 type initOptions struct {
@@ -210,6 +216,8 @@ func parseFlags(config *Config) {
 	JSONConfigFilePathDesc := "JSON configuration file path"
 	flag.StringVar(&config.JSONConfigFilePath, "c", config.JSONConfigFilePath, JSONConfigFilePathDesc)
 	flag.StringVar(&config.JSONConfigFilePath, "config", config.JSONConfigFilePath, JSONConfigFilePathDesc)
+
+	flag.StringVar(&config.TrustedSubnet, "t", config.TrustedSubnet, "CIDR for the trusted subnet")
 
 	flag.Parse()
 }
