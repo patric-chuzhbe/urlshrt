@@ -9,11 +9,20 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"google.golang.org/grpc"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/grpcserver"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/service"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/ipchecker"
 
 	"go.uber.org/zap"
 
@@ -64,6 +73,10 @@ type UserUrlsKeeper interface {
 		ctx context.Context,
 		usersURLs map[string][]string,
 	) error
+
+	GetNumberOfShortenedURLs(ctx context.Context) (int64, error)
+
+	GetNumberOfUsers(ctx context.Context) (int64, error)
 }
 
 // Transactioner defines methods for handling database transactions.
@@ -142,6 +155,14 @@ type Remover interface {
 	EnqueueJob(job *models.URLDeleteJob)
 }
 
+type ipChecker interface {
+	IsTrustedSubnetEmpty() bool
+
+	GetClientIP(request *http.Request) (net.IP, error)
+
+	Check(clientIP net.IP) bool
+}
+
 // App encapsulates the configuration, HTTP handler, Storage backend,
 // and background services (such as URL remover) needed to run the URL shortener service.
 type App struct {
@@ -151,6 +172,9 @@ type App struct {
 	stopUrlsRemover context.CancelFunc
 	httpHandler     http.Handler
 	server          *http.Server
+	ipChecker       ipChecker
+	grpcServer      *grpc.Server
+	grpcListener    net.Listener
 }
 
 // New initializes a new instance of App by:
@@ -196,20 +220,45 @@ func New() (*App, error) {
 		logger.Log.Debugln("Error passed from the `app.urlsRemover.ListenErrors()`:", zap.Error(err))
 	})
 
+	ipChecker, err := ipchecker.New(app.cfg.TrustedSubnet)
+	if err != nil {
+		return nil, err
+	}
+
+	s := service.New(
+		app.db,
+		app.urlsRemover,
+		app.cfg.ShortURLBase,
+	)
+
+	authenticator := auth.New(
+		app.db,
+		app.cfg.AuthCookieName,
+		authCookieSigningSecretKey,
+	)
+
 	app.httpHandler = router.New(
 		app.db,
-		app.cfg.ShortURLBase,
-		auth.New(
-			app.db,
-			app.cfg.AuthCookieName,
-			authCookieSigningSecretKey,
-		),
-		app.urlsRemover,
+		authenticator,
+		ipChecker,
+		s,
 	)
 
 	app.server = &http.Server{
 		Addr:    app.cfg.RunAddr,
 		Handler: app.httpHandler,
+	}
+
+	if app.cfg.GRPCEnabled {
+		app.grpcServer, app.grpcListener, err = grpcserver.NewGRPCServer(
+			app.cfg.GRPCAddress,
+			grpcserver.NewShortenerHandler(s),
+			authenticator,
+			app.db,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return app, nil
@@ -238,6 +287,13 @@ func (a *App) Run() error {
 		}
 	}()
 
+	grpcErrCh := make(chan error, 1)
+	if a.cfg.GRPCEnabled {
+		go func() {
+			grpcErrCh <- a.grpcServer.Serve(a.grpcListener)
+		}()
+	}
+
 	select {
 	case <-ctx.Done():
 		logger.Log.Infoln("Received shutdown signal. Saving database and exiting...")
@@ -249,10 +305,18 @@ func (a *App) Run() error {
 			return fmt.Errorf("server shutdown error: %w", err)
 		}
 
+		if a.grpcServer != nil {
+			a.grpcServer.GracefulStop()
+			logger.Log.Infoln("gRPC server stopped")
+		}
+
 		return a.db.Close()
 
 	case err := <-serverErrCh:
-		return fmt.Errorf("server error: %w", err)
+		return fmt.Errorf("HTTP server error: %w", err)
+
+	case err := <-grpcErrCh:
+		return fmt.Errorf("gRPC server error: %w", err)
 	}
 }
 
@@ -278,7 +342,7 @@ func getAvailableStorageType(cfg *config.Config) int {
 func getStorageByType(cfg *config.Config) (Storage, error) {
 	switch getAvailableStorageType(cfg) {
 	case models.StorageTypeUnknown:
-		return nil, errors.New("unknown Storage type")
+		return nil, errors.New("unknown storage type")
 
 	case models.StorageTypePostgresql:
 		return postgresdb.New(

@@ -14,6 +14,10 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/patric-chuzhbe/urlshrt/internal/service"
+
+	"github.com/patric-chuzhbe/urlshrt/internal/ipchecker"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
@@ -45,6 +49,10 @@ type userUrlsKeeper interface {
 		urls []string,
 		transaction *sql.Tx,
 	) error
+
+	GetNumberOfShortenedURLs(ctx context.Context) (int64, error)
+
+	GetNumberOfUsers(ctx context.Context) (int64, error)
 }
 
 type transactioner interface {
@@ -157,11 +165,22 @@ func setupTestRouter(t *testing.T, optionsProto ...initOption) (*httptest.Server
 		authMiddleware = auth.New(db, cfg.AuthCookieName, authKey)
 	}
 
+	ipChecker, err := ipchecker.New(cfg.TrustedSubnet)
+	if t != nil {
+		require.NoError(t, err)
+	}
+
+	s := service.New(
+		db,
+		&mockUrlsRemover{},
+		cfg.ShortURLBase,
+	)
+
 	theRouter := router.New(
 		db,
-		cfg.ShortURLBase,
 		authMiddleware,
-		&mockUrlsRemover{},
+		ipChecker,
+		s,
 	)
 
 	err = logger.Init("debug")

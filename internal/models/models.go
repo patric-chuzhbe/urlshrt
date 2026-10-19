@@ -72,3 +72,13 @@ type URLDeleteJob struct {
 // and returns a modified string. It is typically used to apply formatting
 // to short URLs before presenting them to the user (e.g., prefixing with a base URL).
 type URLFormatter func(string) string
+
+// InternalStatsResponse defines the schema for the response payload
+// of the GET /api/internal/stats endpoint.
+//
+// It contains service-level statistics useful for internal monitoring,
+// including the number of active shortened URLs and registered users.
+type InternalStatsResponse struct {
+	URLs  int64 `json:"urls"`  // Total active (non-deleted) shortened URLs
+	Users int64 `json:"users"` // Total count of distinct users tracked by the application.
+}

@@ -89,6 +89,28 @@ func (q *Queries) FindShortsByFulls(ctx context.Context, originalUrls []string) 
 	return items, nil
 }
 
+const getNumberOfShortenedURLs = `-- name: GetNumberOfShortenedURLs :one
+SELECT COUNT(*) FROM url_redirects WHERE NOT is_deleted
+`
+
+func (q *Queries) GetNumberOfShortenedURLs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getNumberOfShortenedURLs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const getNumberOfUsers = `-- name: GetNumberOfUsers :one
+SELECT COUNT(*) FROM users
+`
+
+func (q *Queries) GetNumberOfUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getNumberOfUsers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getUserByID = `-- name: GetUserByID :one
 SELECT user_id
     FROM users

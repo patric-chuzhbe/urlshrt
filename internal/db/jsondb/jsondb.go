@@ -106,7 +106,7 @@ func (db *JSONDB) SaveUserUrls(
 func (db *JSONDB) GetUserUrls(
 	ctx context.Context,
 	userID string,
-	shortURLFormatter models.URLFormatter, /*func(string) string*/
+	shortURLFormatter models.URLFormatter,
 ) (models.UserUrls, error) {
 	formatter := func(str string) string { return str }
 	if shortURLFormatter != nil {
@@ -257,6 +257,26 @@ func (db *JSONDB) IsShortExists(ctx context.Context, short string) (bool, error)
 	_, exists := db.Cache.ShortToFull[short]
 
 	return exists, nil
+}
+
+// GetNumberOfUsers returns the total number of unique users stored
+// in the JSON-based storage. This is typically used for reporting
+// and monitoring endpoints.
+func (db *JSONDB) GetNumberOfUsers(ctx context.Context) (int64, error) {
+	return int64(len(db.Cache.Users)), nil
+}
+
+// GetNumberOfShortenedURLs returns the total number of shortened
+// URLs that are not marked as deleted in the JSON-based storage.
+func (db *JSONDB) GetNumberOfShortenedURLs(ctx context.Context) (int64, error) {
+	result := int64(0)
+	for _, full := range db.Cache.ShortToFull {
+		isDeleted, ok := db.Cache.UrlsToIsDeletedMap[full]
+		if !ok || !isDeleted {
+			result++
+		}
+	}
+	return result, nil
 }
 
 func initDBFile(fileName string) error {

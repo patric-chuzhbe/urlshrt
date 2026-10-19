@@ -19,6 +19,19 @@ import (
 // Use it in router tests to simulate database behavior.
 type StorageMock struct {
 	mock.Mock
+
+	// OnGetNumberOfUsers is an optional function field that can be assigned
+	// to define custom mock behavior for GetNumberOfUsers in tests.
+	//
+	// If set, GetNumberOfUsers will delegate to this function instead of
+	// using testify's generic mock handler.
+	OnGetNumberOfUsers func(ctx context.Context) (int64, error)
+
+	// OnGetNumberOfShortenedURLs is an optional function field that can be used
+	// to customize the return values of GetNumberOfShortenedURLs in tests.
+	//
+	// If non-nil, the mock implementation will call this function directly.
+	OnGetNumberOfShortenedURLs func(ctx context.Context) (int64, error)
 }
 
 // Ping mocks the pinger interface to simulate a health check.
@@ -121,4 +134,26 @@ func (m *StorageMock) GetUserByID(ctx context.Context, userID string, tx *sql.Tx
 func (m *StorageMock) Close() error {
 	args := m.Called()
 	return args.Error(0)
+}
+
+// GetNumberOfUsers returns the number of users as defined by the mock.
+//
+// If OnGetNumberOfUsers is non-nil, it will be called to produce the result.
+// Otherwise, the method returns 0 and no error by default.
+func (m *StorageMock) GetNumberOfUsers(ctx context.Context) (int64, error) {
+	if m.OnGetNumberOfUsers != nil {
+		return m.OnGetNumberOfUsers(ctx)
+	}
+	return 0, nil
+}
+
+// GetNumberOfShortenedURLs returns the number of active shortened URLs.
+//
+// If OnGetNumberOfShortenedURLs is defined, the method will call it and return
+// its result. Otherwise, it defaults to returning 0 and no error.
+func (m *StorageMock) GetNumberOfShortenedURLs(ctx context.Context) (int64, error) {
+	if m.OnGetNumberOfShortenedURLs != nil {
+		return m.OnGetNumberOfShortenedURLs(ctx)
+	}
+	return 0, nil
 }

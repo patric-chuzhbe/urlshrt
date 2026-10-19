@@ -69,3 +69,9 @@ BEGIN
         EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
     END LOOP;
 END $$;
+
+-- name: GetNumberOfShortenedURLs :one
+SELECT COUNT(*) FROM url_redirects WHERE NOT is_deleted;
+
+-- name: GetNumberOfUsers :one
+SELECT COUNT(*) FROM users;
